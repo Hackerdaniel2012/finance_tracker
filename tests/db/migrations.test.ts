@@ -3,7 +3,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { applySql, createTestDatabase, firstValue, indexNames, tableNames } from './test-database';
 
-const migrationPath = resolve('migrations/0001_initial_schema.sql');
+const initialMigrationPath = resolve('migrations/0001_initial_schema.sql');
+const seedCategoriesMigrationPath = resolve('migrations/0002_seed_default_categories.sql');
 
 const expectedTables = [
 	'account_balance_snapshots',
@@ -28,7 +29,7 @@ const expectedTables = [
 describe('D1 migrations', () => {
 	it('applies the initial schema with every V1 table', async () => {
 		const db = await createTestDatabase();
-		const migration = await readFile(migrationPath, 'utf8');
+		const migration = await readFile(initialMigrationPath, 'utf8');
 
 		applySql(db, migration);
 
@@ -37,7 +38,7 @@ describe('D1 migrations', () => {
 
 	it('creates one-to-one account and import profile linkage', async () => {
 		const db = await createTestDatabase();
-		const migration = await readFile(migrationPath, 'utf8');
+		const migration = await readFile(initialMigrationPath, 'utf8');
 		applySql(db, migration);
 
 		db.run("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main Giro')");
@@ -54,7 +55,7 @@ describe('D1 migrations', () => {
 
 	it('deduplicates transactions by profile and dedupe key', async () => {
 		const db = await createTestDatabase();
-		const migration = await readFile(migrationPath, 'utf8');
+		const migration = await readFile(initialMigrationPath, 'utf8');
 		applySql(db, migration);
 
 		db.run("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main Giro')");
@@ -82,7 +83,7 @@ describe('D1 migrations', () => {
 
 	it('cascades import batch deletion to transactions and row errors without storing raw rows', async () => {
 		const db = await createTestDatabase();
-		const migration = await readFile(migrationPath, 'utf8');
+		const migration = await readFile(initialMigrationPath, 'utf8');
 		applySql(db, migration);
 
 		db.run("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main Giro')");
@@ -124,7 +125,7 @@ describe('D1 migrations', () => {
 
 	it('adds indexes for date, review, planning, and import queries', async () => {
 		const db = await createTestDatabase();
-		const migration = await readFile(migrationPath, 'utf8');
+		const migration = await readFile(initialMigrationPath, 'utf8');
 
 		applySql(db, migration);
 
@@ -139,5 +140,23 @@ describe('D1 migrations', () => {
 				'idx_balance_snapshots_account_date'
 			])
 		);
+	});
+
+	it('seeds editable default categories without creating duplicates', async () => {
+		const db = await createTestDatabase();
+		const initialMigration = await readFile(initialMigrationPath, 'utf8');
+		const seedCategoriesMigration = await readFile(seedCategoriesMigrationPath, 'utf8');
+
+		applySql(db, initialMigration);
+		applySql(db, seedCategoriesMigration);
+		applySql(db, seedCategoriesMigration);
+
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM categories')).toBe(11);
+		expect(
+			firstValue<string>(
+				db,
+				"SELECT name FROM categories WHERE id = 'cat-unknown' AND type = 'unknown' AND is_default = 1"
+			)
+		).toBe('Unknown');
 	});
 });
