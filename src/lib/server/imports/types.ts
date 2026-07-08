@@ -41,3 +41,19 @@ export interface ImportReport {
 	errorCount: number;
 	unknownCount: number;
 }
+
+export interface ImportBatch {
+	id: string;
+	profileId: string;
+	accountId: string;
+	accountName: string;
+	adapterId: BankId;
+	fileHash: string;
+	startDate: string | null;
+	endDate: string | null;
+	rowCount: number;
+	importedCount: number;
+	duplicateCount: number;
+	errorCount: number;
+	createdAt: string;
+}
