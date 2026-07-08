@@ -1,0 +1,155 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+	applySql,
+	createTestDatabase,
+	createTestDbClient,
+	firstValue
+} from '../../../../tests/db/test-database';
+import { createAccount, createProfile } from '../accounts/repository';
+import { createCategoryRule } from '../categories/repository';
+import type { DbClient } from '../db-client';
+import { confirmImport } from '../imports/confirm';
+import { sha256Hex } from '../imports/shared';
+import { listTransactions, listUnknownTransactions, updateTransaction } from './repository';
+
+let db: DbClient;
+let sqlite: Awaited<ReturnType<typeof createTestDatabase>>;
+
+beforeEach(async () => {
+	sqlite = await createTestDatabase();
+	applySql(sqlite, await readFile(resolve('migrations/0001_initial_schema.sql'), 'utf8'));
+	applySql(sqlite, await readFile(resolve('migrations/0002_seed_default_categories.sql'), 'utf8'));
+	db = createTestDbClient(sqlite);
+});
+
+describe('transaction repository', () => {
+	it('lists transactions with filters, sorting, pagination, and tags', async () => {
+		await seedTransactions();
+		const firstPage = await listTransactions(db, {
+			search: 'coffee',
+			sort: 'amount_cents',
+			direction: 'asc',
+			limit: 1,
+			offset: 0
+		});
+
+		expect(firstPage.pagination).toEqual({ limit: 1, offset: 0, total: 1 });
+		expect(firstPage.transactions[0]).toMatchObject({
+			payee: 'Cafe',
+			amountCents: -400,
+			classificationStatus: 'unknown',
+			reviewFlag: { reason: 'unknown_category', status: 'open' }
+		});
+
+		await updateTransaction(db, {
+			id: firstPage.transactions[0]?.id ?? '',
+			note: 'Morning coffee',
+			tagNames: ['Work', 'Coffee']
+		});
+		const tagged = await listTransactions(db, {
+			search: 'Morning',
+			sort: 'booking_date',
+			direction: 'desc',
+			limit: 10,
+			offset: 0
+		});
+
+		expect(tagged.transactions[0]?.tags.map((tag) => tag.name)).toEqual(['Coffee', 'Work']);
+	});
+
+	it('updates category, resolves review flags, and creates category rules from edits', async () => {
+		await seedTransactions();
+		const unknown = await listUnknownTransactions(db, {
+			sort: 'booking_date',
+			direction: 'desc',
+			limit: 10,
+			offset: 0
+		});
+		const transactionId = unknown.transactions[0]?.id ?? '';
+
+		const updated = await updateTransaction(db, {
+			id: transactionId,
+			categoryId: 'cat-leisure',
+			note: 'Manual review done',
+			tagNames: ['Fun'],
+			createRule: true,
+			ruleName: 'Cafe rule'
+		});
+
+		expect(updated).toMatchObject({
+			id: transactionId,
+			categoryId: 'cat-leisure',
+			categoryName: 'Leisure',
+			classificationStatus: 'manual',
+			note: 'Manual review done',
+			reviewFlag: null
+		});
+		expect(updated.tags.map((tag) => tag.name)).toEqual(['Fun']);
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT status FROM transaction_review_flags WHERE transaction_id = '" + transactionId + "'"
+			)
+		).toBe('resolved');
+		expect(
+			firstValue<string>(sqlite, "SELECT pattern FROM category_rules WHERE name = 'Cafe rule'")
+		).toBe('Cafe');
+	});
+
+	it('returns not found errors for missing transactions and categories', async () => {
+		await seedTransactions();
+		const [transaction] = (await listTransactions(db, baseFilters())).transactions;
+
+		await expect(updateTransaction(db, { id: 'missing', note: 'Nope' })).rejects.toThrow(
+			'Transaction not found'
+		);
+		await expect(
+			updateTransaction(db, { id: transaction?.id ?? '', categoryId: 'missing' })
+		).rejects.toThrow('Category not found');
+	});
+});
+
+function baseFilters() {
+	return {
+		sort: 'booking_date' as const,
+		direction: 'desc' as const,
+		limit: 10,
+		offset: 0
+	};
+}
+
+async function seedTransactions() {
+	const account = await createAccount(db, { name: 'DKB Giro' });
+	const profile = await createProfile(db, {
+		accountId: account.id,
+		bankId: 'dkb',
+		label: 'DKB CSV'
+	});
+	await createCategoryRule(db, {
+		categoryId: 'cat-groceries',
+		name: 'Shop rule',
+		field: 'payee',
+		operator: 'contains',
+		pattern: 'Shop',
+		priority: 10
+	});
+	const csv = dkbCsv([
+		'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"',
+		'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"'
+	]);
+
+	await confirmImport(db, {
+		profileId: profile.id,
+		csv,
+		expectedHash: await sha256Hex(csv)
+	});
+}
+
+function dkbCsv(rows: string[]): string {
+	return [
+		'"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"',
+		...rows
+	].join('\n');
+}
