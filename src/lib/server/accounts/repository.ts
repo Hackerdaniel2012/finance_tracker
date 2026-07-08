@@ -161,7 +161,7 @@ async function getAccount(db: DbClient, id: string): Promise<Account | null> {
 	return row ? mapAccount(row) : null;
 }
 
-async function getProfile(db: DbClient, id: string): Promise<ImportProfile | null> {
+export async function getProfile(db: DbClient, id: string): Promise<ImportProfile | null> {
 	const row = await db
 		.prepare(
 			`SELECT id, account_id, bank_id, label, status, created_at, updated_at
