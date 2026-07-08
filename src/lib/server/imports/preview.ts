@@ -2,6 +2,7 @@ import { getBankAdapter } from '$lib/banks';
 import type { DbClient, DbRow } from '../db-client';
 import { NotFoundError, ValidationError } from '../accounts/errors';
 import { getProfile } from '../accounts/repository';
+import { getDateRange, sha256Hex } from './shared';
 import type { ImportPreview, ImportPreviewInput } from './types';
 
 const sampleRowLimit = 5;
@@ -73,25 +74,6 @@ async function countExistingTransactions(
 		.first<CountRow>();
 
 	return Number(row?.count ?? 0);
-}
-
-function getDateRange(dates: string[]): { startDate: string | null; endDate: string | null } {
-	if (dates.length === 0) {
-		return { startDate: null, endDate: null };
-	}
-
-	const sorted = [...dates].sort();
-	return {
-		startDate: sorted[0] ?? null,
-		endDate: sorted.at(-1) ?? null
-	};
-}
-
-async function sha256Hex(value: string): Promise<string> {
-	const bytes = new TextEncoder().encode(value);
-	const digest = await crypto.subtle.digest('SHA-256', bytes);
-
-	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 interface CountRow extends DbRow {

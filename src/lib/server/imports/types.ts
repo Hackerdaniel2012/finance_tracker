@@ -21,3 +21,23 @@ export interface ImportPreview {
 	sampleRows: NormalizedTransaction[];
 	errors: ParseError[];
 }
+
+export interface ConfirmImportInput {
+	profileId: string;
+	csv: string;
+	expectedHash: string;
+}
+
+export interface ImportReport {
+	batchId: string;
+	profileId: string;
+	adapterId: BankId;
+	fileHash: string;
+	startDate: string | null;
+	endDate: string | null;
+	rowCount: number;
+	importedCount: number;
+	duplicateCount: number;
+	errorCount: number;
+	unknownCount: number;
+}
