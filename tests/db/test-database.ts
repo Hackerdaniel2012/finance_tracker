@@ -1,4 +1,11 @@
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
+import type {
+	DbAllResult,
+	DbClient,
+	DbRunResult,
+	DbStatement,
+	DbValue
+} from '../../src/lib/server/db-client';
 
 let sqlitePromise: Promise<SqlJsStatic> | undefined;
 
@@ -33,4 +40,56 @@ export function indexNames(db: Database): string[] {
 export function firstValue<T extends string | number>(db: Database, sql: string): T | undefined {
 	const rows = db.exec(sql);
 	return rows[0]?.values[0]?.[0] as T | undefined;
+}
+
+export function createTestDbClient(db: Database): DbClient {
+	return {
+		prepare(sql) {
+			return new SqlJsStatement(db, sql);
+		}
+	};
+}
+
+class SqlJsStatement implements DbStatement {
+	private values: DbValue[] = [];
+
+	constructor(
+		private readonly db: Database,
+		private readonly sql: string
+	) {}
+
+	bind(...values: DbValue[]): DbStatement {
+		this.values = values;
+		return this;
+	}
+
+	async all<T extends Record<string, DbValue>>(): Promise<DbAllResult<T>> {
+		const statement = this.db.prepare(this.sql);
+		try {
+			statement.bind(this.values);
+			const results: T[] = [];
+			while (statement.step()) {
+				results.push(statement.getAsObject() as T);
+			}
+
+			return { results, success: true };
+		} finally {
+			statement.free();
+		}
+	}
+
+	async first<T extends Record<string, DbValue>>(): Promise<T | null> {
+		const { results } = await this.all<T>();
+		return results[0] ?? null;
+	}
+
+	async run(): Promise<DbRunResult> {
+		this.db.run(this.sql, this.values);
+		return {
+			success: true,
+			meta: {
+				changes: this.db.getRowsModified()
+			}
+		};
+	}
 }
