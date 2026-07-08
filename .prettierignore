@@ -1,0 +1,17 @@
+# Package Managers
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+bun.lockb
+
+# Project docs
+PLAN.md
+
+# Generated
+project.inlang/.meta.json
+project.inlang/README.md
+worker-configuration.d.ts
+
+# Miscellaneous
+/static/

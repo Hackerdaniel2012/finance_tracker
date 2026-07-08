@@ -1,0 +1,14 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"app_title": "Finance Tracker",
+	"app_subtitle": "Local-first cashflow, imports, and planning for one household.",
+	"nav_dashboard": "Dashboard",
+	"nav_imports": "Imports",
+	"nav_transactions": "Transactions",
+	"nav_planning": "Planning",
+	"phase_badge": "V1 scaffold",
+	"status_ready": "SvelteKit, Cloudflare Pages, Tailwind, Paraglide, Vitest, Playwright, and LayerChart are ready.",
+	"privacy_note": "No authentication, no raw CSV storage, and no external AI calls in V1.",
+	"next_step_title": "Next build step",
+	"next_step_body": "Add the Cloudflare D1 binding, migrations, and isolated database test utilities."
+}

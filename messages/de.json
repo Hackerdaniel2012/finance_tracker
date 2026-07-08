@@ -1,0 +1,14 @@
+{
+	"$schema": "https://inlang.com/schema/inlang-message-format",
+	"app_title": "Finanztracker",
+	"app_subtitle": "Lokale Cashflow-, Import- und Planungsansicht fuer einen Haushalt.",
+	"nav_dashboard": "Dashboard",
+	"nav_imports": "Importe",
+	"nav_transactions": "Transaktionen",
+	"nav_planning": "Planung",
+	"phase_badge": "V1-Grundgeruest",
+	"status_ready": "SvelteKit, Cloudflare Pages, Tailwind, Paraglide, Vitest, Playwright und LayerChart sind bereit.",
+	"privacy_note": "Keine Anmeldung, keine Roh-CSV-Speicherung und keine externen KI-Aufrufe in V1.",
+	"next_step_title": "Naechster Bauschritt",
+	"next_step_body": "Cloudflare-D1-Binding, Migrationen und isolierte Datenbank-Testhilfen hinzufuegen."
+}
