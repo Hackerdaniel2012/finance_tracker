@@ -1,19 +1,18 @@
 import { json } from '@sveltejs/kit';
 import { jsonError, getRequestDatabase } from '$lib/server/api';
-import { getSummaryReport } from '$lib/server/reports/repository';
+import { getAccountBalanceHistory } from '$lib/server/reports/repository';
 import { parseReportDateRange } from '$lib/server/reports/validation';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async (event) => {
 	try {
-		const accountId = event.url.searchParams.get('accountId') ?? undefined;
-		const summary = await getSummaryReport(
+		const history = await getAccountBalanceHistory(
 			getRequestDatabase(event),
-			parseReportDateRange(event.url),
-			accountId ? { accountId } : undefined
+			event.params.id,
+			parseReportDateRange(event.url)
 		);
 
-		return json({ summary });
+		return json({ history });
 	} catch (error) {
 		return jsonError(error);
 	}

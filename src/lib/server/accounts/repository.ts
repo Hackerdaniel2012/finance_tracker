@@ -147,7 +147,7 @@ export async function createProfile(
 	return profile;
 }
 
-async function getAccount(db: DbClient, id: string): Promise<Account | null> {
+export async function getAccount(db: DbClient, id: string): Promise<Account | null> {
 	const row = await db
 		.prepare(
 			`SELECT id, name, institution, currency, opening_balance_cents, current_balance_cents,

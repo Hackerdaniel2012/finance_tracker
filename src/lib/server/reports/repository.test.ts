@@ -11,7 +11,7 @@ import { createCategoryRule } from '../categories/repository';
 import type { DbClient } from '../db-client';
 import { confirmImport } from '../imports/confirm';
 import { sha256Hex } from '../imports/shared';
-import { getNetWorthReport, getSummaryReport } from './repository';
+import { getAccountBalanceHistory, getNetWorthReport, getSummaryReport } from './repository';
 
 let db: DbClient;
 
@@ -190,6 +190,128 @@ describe('reports repository', () => {
 			{ date: '2026-07-07', assetsCents: 95000, liabilitiesCents: 0, netWorthCents: 95000 },
 			{ date: '2026-07-20', assetsCents: 105000, liabilitiesCents: 0, netWorthCents: 105000 },
 			{ date: '2026-07-31', assetsCents: 105000, liabilitiesCents: 0, netWorthCents: 105000 }
+		]);
+	});
+
+	it('filters the summary report to a single account', async () => {
+		const accountA = await seedReportData();
+		const accountB = await createAccount(db, {
+			name: 'Trade Republic',
+			openingBalanceCents: 50000
+		});
+		const profileB = await createProfile(db, {
+			accountId: accountB.id,
+			bankId: 'trade_republic',
+			label: 'TR CSV'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, currency,
+					balance_after_cents, search_text, classification_status
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			)
+			.bind(
+				'tx-b',
+				profileB.id,
+				accountB.id,
+				'key-b',
+				'2026-07-15',
+				-10000,
+				'EUR',
+				null,
+				'broker',
+				'unknown'
+			)
+			.run();
+
+		const summary = await getSummaryReport(
+			db,
+			{ from: '2026-07-01', to: '2026-07-31' },
+			{
+				accountId: accountA.id
+			}
+		);
+
+		expect(summary.totals).toEqual({
+			incomeCents: 250000,
+			expenseCents: -1634,
+			netCents: 248366,
+			transactionCount: 3,
+			unknownCount: 1
+		});
+		expect(summary.byAccount).toHaveLength(1);
+		expect(summary.byAccount[0]).toMatchObject({
+			accountName: 'DKB Giro',
+			incomeCents: 250000,
+			expenseCents: -1634,
+			netCents: 248366
+		});
+		expect(summary.recentTransactions).toHaveLength(3);
+		expect(summary.recentTransactions.every((tx) => tx.accountName === 'DKB Giro')).toBe(true);
+	});
+
+	it('builds a balance history for a single account', async () => {
+		const account = await createAccount(db, { name: 'N26 Main', openingBalanceCents: 100000 });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'N26 CSV'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, currency,
+					balance_after_cents, search_text, classification_status
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			)
+			.bind(
+				'tx-balance-after',
+				profile.id,
+				account.id,
+				'key-balance-after',
+				'2026-07-05',
+				-2000,
+				'EUR',
+				98000,
+				'grocery',
+				'unknown',
+				'tx-without-balance',
+				profile.id,
+				account.id,
+				'key-without-balance',
+				'2026-07-07',
+				-3000,
+				'EUR',
+				null,
+				'pharmacy',
+				'unknown',
+				'tx-income',
+				profile.id,
+				account.id,
+				'key-income',
+				'2026-07-20',
+				10000,
+				'EUR',
+				null,
+				'income',
+				'unknown'
+			)
+			.run();
+
+		const history = await getAccountBalanceHistory(db, account.id, {
+			from: '2026-07-01',
+			to: '2026-07-31'
+		});
+
+		expect(history.accountId).toBe(account.id);
+		expect(history.accountName).toBe('N26 Main');
+		expect(history.points).toEqual([
+			{ date: '2026-07-01', balanceCents: 100000 },
+			{ date: '2026-07-05', balanceCents: 98000 },
+			{ date: '2026-07-07', balanceCents: 95000 },
+			{ date: '2026-07-20', balanceCents: 105000 },
+			{ date: '2026-07-31', balanceCents: 105000 }
 		]);
 	});
 });

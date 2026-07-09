@@ -23,6 +23,10 @@
 				>
 				<a
 					class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950"
+					href={resolve('/accounts')}>{m.nav_accounts()}</a
+				>
+				<a
+					class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950"
 					href={resolve('/imports')}>{m.nav_imports()}</a
 				>
 				<a

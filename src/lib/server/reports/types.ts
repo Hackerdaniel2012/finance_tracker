@@ -3,6 +3,20 @@ export interface ReportDateRange {
 	to: string;
 }
 
+export interface SummaryReportOptions {
+	accountId?: string;
+}
+
+export interface AccountBalanceHistoryReport {
+	accountId: string;
+	accountName: string;
+	range: ReportDateRange;
+	points: Array<{
+		date: string;
+		balanceCents: number;
+	}>;
+}
+
 export interface SummaryReport {
 	range: ReportDateRange;
 	totals: {

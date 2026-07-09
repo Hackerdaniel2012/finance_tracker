@@ -6,11 +6,10 @@ import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async (event) => {
 	try {
-		const accountId = event.url.searchParams.get('accountId') ?? undefined;
 		const summary = await getSummaryReport(
 			getRequestDatabase(event),
 			parseReportDateRange(event.url),
-			accountId ? { accountId } : undefined
+			{ accountId: event.params.id }
 		);
 
 		return json({ summary });
