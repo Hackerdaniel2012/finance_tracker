@@ -21,7 +21,9 @@
 	let recentError = $state<string | null>(null);
 
 	const balanceCents = $derived(
-		data.account.currentBalanceCents ?? data.account.openingBalanceCents
+		data.summary.byAccount[0]?.balanceCents ??
+			data.account.currentBalanceCents ??
+			data.account.openingBalanceCents
 	);
 	const historyPoints = $derived(
 		data.history.points.map((point: { date: string; balanceCents: number }) => ({

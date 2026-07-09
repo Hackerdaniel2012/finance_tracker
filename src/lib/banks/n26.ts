@@ -44,6 +44,7 @@ export const n26Adapter: BankAdapter = {
 
 		const rows: NormalizedTransaction[] = [];
 		const errors: ParseError[] = [...parsed.errors];
+		const dedupeOccurrences = new Map<string, number>();
 
 		for (const record of parsed.records) {
 			const bookingDate = parseIsoDate(record.values['Booking Date'] ?? '');
@@ -79,6 +80,18 @@ export const n26Adapter: BankAdapter = {
 				record.values['Account Name']
 			);
 			const searchText = normalizeWhitespace(payee, description);
+			const baseDedupeKey = stableFingerprint([
+				bookingDate,
+				valueDate,
+				amountCents,
+				payee,
+				record.values['Partner Iban'],
+				record.values.Type,
+				record.values['Payment Reference'],
+				record.values['Account Name']
+			]);
+			const occurrence = (dedupeOccurrences.get(baseDedupeKey) ?? 0) + 1;
+			dedupeOccurrences.set(baseDedupeKey, occurrence);
 
 			rows.push({
 				bookingDate,
@@ -91,15 +104,7 @@ export const n26Adapter: BankAdapter = {
 				payee,
 				description,
 				searchText,
-				dedupeKey: stableFingerprint([
-					bookingDate,
-					valueDate,
-					amountCents,
-					payee,
-					record.values.Type,
-					record.values['Payment Reference'],
-					record.values['Account Name']
-				]),
+				dedupeKey: `${baseDedupeKey}:${occurrence}`,
 				source: {
 					bankId: 'n26',
 					rowNumber: record.rowNumber,

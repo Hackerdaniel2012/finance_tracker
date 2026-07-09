@@ -35,6 +35,11 @@ export const load: PageLoad = async ({ fetch, params }) => {
 				transactionCount: number;
 				unknownCount: number;
 			};
+			byAccount: Array<{
+				accountId: string;
+				accountName: string;
+				balanceCents: number;
+			}>;
 			byCategory: Array<{
 				categoryId: string | null;
 				categoryName: string;

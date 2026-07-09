@@ -23,6 +23,7 @@
 			transactionCount: number;
 			unknownCount: number;
 		};
+		byAccount: Array<{ accountId: string; accountName: string; balanceCents: number }>;
 		recentTransactions: Array<{
 			id: string;
 			accountName: string;
@@ -99,10 +100,11 @@
 		})) ?? []
 	);
 	const totalAccountBalanceCents = $derived(
-		accounts.reduce(
-			(sum, account) => sum + (account.currentBalanceCents ?? account.openingBalanceCents),
-			0
-		)
+		netWorth?.accounts.reduce((sum, account) => sum + account.balanceCents, 0) ??
+			accounts.reduce(
+				(sum, account) => sum + (account.currentBalanceCents ?? account.openingBalanceCents),
+				0
+			)
 	);
 
 	onMount(() => {
@@ -234,6 +236,14 @@
 			style: 'currency',
 			currency: 'EUR'
 		});
+	}
+
+	function getAccountBalanceCents(account: AccountWithProfile): number {
+		return (
+			netWorth?.accounts.find((balance) => balance.accountId === account.id)?.balanceCents ??
+			account.currentBalanceCents ??
+			account.openingBalanceCents
+		);
 	}
 
 	function formatDate(value: string | null): string {
@@ -481,7 +491,7 @@
 									<h3 class="text-base font-semibold text-zinc-950">{account.name}</h3>
 									<p class="mt-1 text-sm text-zinc-600">
 										{account.institution || m.institution()} / {centsToEuros(
-											account.currentBalanceCents ?? account.openingBalanceCents
+											getAccountBalanceCents(account)
 										)}
 									</p>
 								</div>
