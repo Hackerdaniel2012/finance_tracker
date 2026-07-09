@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { Pathname } from '$app/types';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { locales, localizeHref } from '$lib/paraglide/runtime';
@@ -22,8 +21,9 @@
 				<a class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" href={resolve('/')}
 					>{m.nav_dashboard()}</a
 				>
-				<a class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" href={resolve('/')}
-					>{m.nav_imports()}</a
+				<a
+					class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950"
+					href={resolve('/imports')}>{m.nav_imports()}</a
 				>
 				<a class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" href={resolve('/')}
 					>{m.nav_transactions()}</a
@@ -39,6 +39,7 @@
 
 <div class="hidden">
 	{#each locales as locale (locale)}
-		<a href={resolve(localizeHref(page.url.pathname, { locale }) as Pathname)}>{locale}</a>
+		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+		<a href={localizeHref(page.url.pathname, { locale })}>{locale}</a>
 	{/each}
 </div>

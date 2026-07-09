@@ -13,3 +13,11 @@ test('renders the scaffold dashboard shell', async ({ page }) => {
 	).toBeVisible();
 	await expect(page.getByRole('button', { name: /create account|konto erstellen/i })).toBeVisible();
 });
+
+test('renders the CSV import shell', async ({ page }) => {
+	await page.goto('/imports');
+
+	await expect(page.getByRole('heading', { name: /^imports$|^importe$/i })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /upload csv|csv hochladen/i })).toBeVisible();
+	await expect(page.getByRole('button', { name: /preview import|import pruefen/i })).toBeVisible();
+});
