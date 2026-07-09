@@ -71,6 +71,68 @@ describe('cashflow repository', () => {
 			'Gym',
 			'Rent'
 		]);
+		expect(projection.accountProjections).toEqual([
+			expect.objectContaining({
+				accountName: 'Main Giro',
+				currentBalanceCents: 150000,
+				upcomingPaymentCents: 95499,
+				projectedBalanceCents: 54501
+			})
+		]);
+	});
+
+	it('includes per-account balance before salary projections', async () => {
+		const main = await createAccount(db, {
+			name: 'Main Giro',
+			currentBalanceCents: 150000
+		});
+		const savings = await createAccount(db, {
+			name: 'Savings',
+			currentBalanceCents: 70000
+		});
+		await createPlannedPayment(db, {
+			accountId: main.id,
+			payee: 'Rent',
+			amountCents: 80000,
+			dueDate: '2026-07-20'
+		});
+		await createPlannedPayment(db, {
+			accountId: savings.id,
+			payee: 'Insurance',
+			amountCents: 20000,
+			dueDate: '2026-07-21'
+		});
+		await createPlannedIncome(db, {
+			accountId: main.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+
+		const projection = await getBalanceBeforeSalaryProjection(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31'
+		});
+
+		expect(projection).toMatchObject({
+			currentBalanceCents: 220000,
+			upcomingPaymentCents: 100000,
+			projectedBalanceCents: 120000
+		});
+		expect(projection.accountProjections).toEqual([
+			expect.objectContaining({
+				accountName: 'Main Giro',
+				currentBalanceCents: 150000,
+				upcomingPaymentCents: 80000,
+				projectedBalanceCents: 70000
+			}),
+			expect.objectContaining({
+				accountName: 'Savings',
+				currentBalanceCents: 70000,
+				upcomingPaymentCents: 20000,
+				projectedBalanceCents: 50000
+			})
+		]);
 	});
 
 	it('projects to month end when there is no upcoming income', async () => {

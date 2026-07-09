@@ -1,5 +1,6 @@
 import type { DbClient, DbRow } from '../db-client';
 import type {
+	BalanceBeforeSalaryAccountProjection,
 	BalanceBeforeSalaryProjection,
 	CashflowWindow,
 	UpcomingIncome,
@@ -35,15 +36,22 @@ export async function getBalanceBeforeSalaryProjection(
 	db: DbClient,
 	window: CashflowWindow
 ): Promise<BalanceBeforeSalaryProjection> {
-	const [nextIncome, currentBalanceCents] = await Promise.all([
+	const [nextIncome, accountBalances] = await Promise.all([
 		getNextIncome(db, window),
-		getCurrentBalanceCents(db, window.asOf)
+		getAccountBalances(db, window.asOf)
 	]);
 	const projectionDate = nextIncome ? previousDate(nextIncome.dueDate) : window.monthEnd;
 	const upcomingPayments = await getPaymentsThroughDate(db, window.asOf, projectionDate);
 	const upcomingPaymentCents = upcomingPayments.reduce(
 		(sum, payment) => sum + payment.amountCents,
 		0
+	);
+	const currentBalanceCents = accountBalances.reduce(
+		(sum, account) => sum + account.current_balance_cents,
+		0
+	);
+	const accountProjections = accountBalances.map((account) =>
+		mapAccountProjection(account, upcomingPayments)
 	);
 
 	return {
@@ -53,7 +61,8 @@ export async function getBalanceBeforeSalaryProjection(
 		currentBalanceCents,
 		upcomingPaymentCents,
 		projectedBalanceCents: currentBalanceCents - upcomingPaymentCents,
-		upcomingPayments
+		upcomingPayments,
+		accountProjections
 	};
 }
 
@@ -159,28 +168,40 @@ async function getPaymentsThroughDate(
 	return payments.filter((payment) => payment.dueDate <= to);
 }
 
-async function getCurrentBalanceCents(db: DbClient, asOf: string): Promise<number> {
-	const row = await db
+async function getAccountBalances(db: DbClient, asOf: string): Promise<AccountBalanceRow[]> {
+	const { results } = await db
 		.prepare(
-			`SELECT COALESCE(SUM(balance_cents), 0) AS balance_cents
+			`SELECT
+				account_id,
+				account_name,
+				balance_cents AS current_balance_cents
 			FROM (
 				SELECT
-					a.current_balance_cents AS balance_cents
+					a.id AS account_id,
+					a.name AS account_name,
+					a.current_balance_cents AS balance_cents,
+					a.display_order,
+					a.created_at
 				FROM accounts a
 				WHERE a.current_balance_cents IS NOT NULL
 				UNION ALL
 				SELECT
-					a.opening_balance_cents + COALESCE(SUM(t.amount_cents), 0) AS balance_cents
+					a.id AS account_id,
+					a.name AS account_name,
+					a.opening_balance_cents + COALESCE(SUM(t.amount_cents), 0) AS balance_cents,
+					a.display_order,
+					a.created_at
 				FROM accounts a
 				LEFT JOIN transactions t ON t.account_id = a.id AND t.booking_date <= ?
 				WHERE a.current_balance_cents IS NULL
-				GROUP BY a.id, a.opening_balance_cents
-			)`
+				GROUP BY a.id, a.name, a.opening_balance_cents, a.display_order, a.created_at
+			)
+			ORDER BY display_order ASC, created_at ASC`
 		)
 		.bind(asOf)
-		.first<BalanceRow>();
+		.all<AccountBalanceRow>();
 
-	return row?.balance_cents ?? 0;
+	return results;
 }
 
 function plannedPaymentSelect(): string {
@@ -308,6 +329,23 @@ function compareIncome(a: UpcomingIncome, b: UpcomingIncome): number {
 	return a.dueDate.localeCompare(b.dueDate) || a.payer.localeCompare(b.payer);
 }
 
+function mapAccountProjection(
+	account: AccountBalanceRow,
+	upcomingPayments: UpcomingPayment[]
+): BalanceBeforeSalaryAccountProjection {
+	const upcomingPaymentCents = upcomingPayments
+		.filter((payment) => payment.accountId === account.account_id)
+		.reduce((sum, payment) => sum + payment.amountCents, 0);
+
+	return {
+		accountId: account.account_id,
+		accountName: account.account_name,
+		currentBalanceCents: account.current_balance_cents,
+		upcomingPaymentCents,
+		projectedBalanceCents: account.current_balance_cents - upcomingPaymentCents
+	};
+}
+
 function previousDate(isoDate: string): string {
 	const date = new Date(`${isoDate}T00:00:00.000Z`);
 	date.setUTCDate(date.getUTCDate() - 1);
@@ -371,6 +409,8 @@ interface ContractIncomeRow extends DbRow {
 	due_date: string;
 }
 
-interface BalanceRow extends DbRow {
-	balance_cents: number;
+interface AccountBalanceRow extends DbRow {
+	account_id: string;
+	account_name: string;
+	current_balance_cents: number;
 }

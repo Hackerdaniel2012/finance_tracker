@@ -44,7 +44,16 @@ describe('/api/balance-before-salary', () => {
 				currentBalanceCents: 150000,
 				upcomingPaymentCents: 80000,
 				projectedBalanceCents: 70000,
-				nextIncome: { payer: 'Employer' }
+				nextIncome: { payer: 'Employer' },
+				accountProjections: [
+					{
+						accountId: account.id,
+						accountName: 'Main Giro',
+						currentBalanceCents: 150000,
+						upcomingPaymentCents: 80000,
+						projectedBalanceCents: 70000
+					}
+				]
 			}
 		});
 	});

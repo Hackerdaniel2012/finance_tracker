@@ -35,4 +35,13 @@ export interface BalanceBeforeSalaryProjection {
 	upcomingPaymentCents: number;
 	projectedBalanceCents: number;
 	upcomingPayments: UpcomingPayment[];
+	accountProjections: BalanceBeforeSalaryAccountProjection[];
+}
+
+export interface BalanceBeforeSalaryAccountProjection {
+	accountId: string;
+	accountName: string;
+	currentBalanceCents: number;
+	upcomingPaymentCents: number;
+	projectedBalanceCents: number;
 }
