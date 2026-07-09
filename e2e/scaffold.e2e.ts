@@ -22,6 +22,19 @@ test('renders the CSV import shell', async ({ page }) => {
 	await expect(page.getByRole('button', { name: /preview import|import pruefen/i })).toBeVisible();
 });
 
+test('renders the account management shell', async ({ page }) => {
+	await page.goto('/accounts');
+
+	await expect(
+		page.getByRole('heading', { name: /account summary|kontouebersicht/i })
+	).toBeVisible();
+	await expect(page.getByRole('heading', { name: /^accounts$|^konten$/i })).toBeVisible();
+	await expect(page.getByRole('button', { name: /create account|konto erstellen/i })).toBeVisible();
+	await expect(
+		page.getByRole('button', { name: /create profile|profil erstellen/i })
+	).toBeVisible();
+});
+
 test('renders the transaction review shell', async ({ page }) => {
 	await page.goto('/transactions');
 

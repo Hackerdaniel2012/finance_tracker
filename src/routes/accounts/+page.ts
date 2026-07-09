@@ -1,15 +1,18 @@
-import { redirect } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
 
 export const load: PageLoad = async ({ fetch }) => {
 	const response = await fetch('/api/accounts');
-	const payload = (await response.json()) as { accounts: Array<{ id: string; name: string }> };
+	const payload = (await response.json()) as {
+		accounts: Array<{
+			id: string;
+			name: string;
+			institution: string | null;
+			openingBalanceCents: number;
+			currentBalanceCents: number | null;
+			profile: { id: string; bankId: string; label: string } | null;
+		}>;
+	};
 	const accounts = payload.accounts ?? [];
-	const first = accounts[0];
-
-	if (first) {
-		redirect(307, `/accounts/${first.id}`);
-	}
 
 	return { accounts };
 };
