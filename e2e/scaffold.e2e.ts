@@ -40,6 +40,10 @@ test('renders the transaction review shell', async ({ page }) => {
 
 	await expect(page.getByRole('heading', { name: /transactions|transaktionen/i })).toBeVisible();
 	await expect(page.getByRole('heading', { name: /filters|filter/i })).toBeVisible();
+	await expect(page.getByLabel(/^account$|^konto$/i)).toBeVisible();
+	await expect(page.getByLabel(/transaction direction|transaktionsrichtung/i)).toBeVisible();
+	await expect(page.getByLabel(/minimum amount|mindestbetrag/i)).toBeVisible();
+	await expect(page.getByLabel(/^tag$/i)).toBeVisible();
 	await expect(page.getByRole('button', { name: /apply filters|filter anwenden/i })).toBeVisible();
 });
 

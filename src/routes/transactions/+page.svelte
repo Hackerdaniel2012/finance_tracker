@@ -3,9 +3,16 @@
 	import { onMount } from 'svelte';
 
 	type TransactionClassificationStatus = 'unknown' | 'auto' | 'manual' | 'ignored';
+	type TransactionDirection = 'income' | 'expense';
 	type TransactionSort = 'booking_date' | 'amount_cents' | 'payee';
 	type SortDirection = 'asc' | 'desc';
 	type CategoryType = 'income' | 'expense' | 'transfer' | 'investment' | 'unknown';
+
+	interface Account {
+		id: string;
+		name: string;
+		institution: string | null;
+	}
 
 	interface Category {
 		id: string;
@@ -41,9 +48,11 @@
 	}
 
 	const statusOptions: TransactionClassificationStatus[] = ['unknown', 'auto', 'manual', 'ignored'];
+	const transactionDirectionOptions: TransactionDirection[] = ['expense', 'income'];
 	const sortOptions: TransactionSort[] = ['booking_date', 'amount_cents', 'payee'];
 	const pageSize = 25;
 
+	let accounts = $state<Account[]>([]);
 	let categories = $state<Category[]>([]);
 	let transactions = $state<Transaction[]>([]);
 	let total = $state(0);
@@ -51,8 +60,13 @@
 	let search = $state('');
 	let from = $state('');
 	let to = $state('');
+	let accountFilter = $state('');
 	let statusFilter = $state('');
 	let categoryFilter = $state('');
+	let transactionDirectionFilter = $state('');
+	let minAmount = $state('');
+	let maxAmount = $state('');
+	let tagFilter = $state('');
 	let sort = $state<TransactionSort>('booking_date');
 	let direction = $state<SortDirection>('desc');
 	let selected = $state<Transaction | null>(null);
@@ -81,11 +95,13 @@
 		error = null;
 
 		try {
-			const [categoryPayload, transactionPayload] = await Promise.all([
+			const [accountPayload, categoryPayload, transactionPayload] = await Promise.all([
+				fetchJson<{ accounts: Account[] }>('/api/accounts'),
 				fetchJson<{ categories: Category[] }>('/api/categories'),
 				fetchJson<TransactionListResult>(`/api/transactions?${buildQueryString()}`)
 			]);
 
+			accounts = accountPayload.accounts;
 			categories = categoryPayload.categories;
 			applyTransactionResult(transactionPayload);
 			pageStatus = m.transactions_status_ready();
@@ -197,8 +213,16 @@
 		if (search.trim()) params.push(['search', search.trim()]);
 		if (from) params.push(['from', from]);
 		if (to) params.push(['to', to]);
+		if (accountFilter) params.push(['accountId', accountFilter]);
 		if (statusFilter) params.push(['status', statusFilter]);
 		if (categoryFilter) params.push(['categoryId', categoryFilter]);
+		if (transactionDirectionFilter)
+			params.push(['transactionDirection', transactionDirectionFilter]);
+		const minAmountCents = eurosToOptionalCents(minAmount);
+		const maxAmountCents = eurosToOptionalCents(maxAmount);
+		if (minAmountCents !== null) params.push(['minAmountCents', String(minAmountCents)]);
+		if (maxAmountCents !== null) params.push(['maxAmountCents', String(maxAmountCents)]);
+		if (tagFilter.trim()) params.push(['tag', tagFilter.trim()]);
 
 		return params
 			.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
@@ -228,6 +252,13 @@
 		});
 	}
 
+	function eurosToOptionalCents(value: string): number | null {
+		const trimmed = value.trim();
+		if (!trimmed) return null;
+		const parsed = Number.parseFloat(trimmed.replace(',', '.'));
+		return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
+	}
+
 	function formatDate(value: string | null): string {
 		if (!value) return m.not_available();
 		return new Date(`${value}T00:00:00`).toLocaleDateString();
@@ -239,6 +270,13 @@
 			auto: m.status_auto(),
 			manual: m.status_manual(),
 			ignored: m.status_ignored()
+		}[value];
+	}
+
+	function transactionDirectionLabel(value: TransactionDirection): string {
+		return {
+			income: m.account_income(),
+			expense: m.account_expenses()
 		}[value];
 	}
 
@@ -290,6 +328,19 @@
 				</select>
 			</label>
 			<label class="grid gap-1 text-sm font-medium text-zinc-700">
+				<span>{m.account()}</span>
+				<select
+					aria-label={m.account()}
+					class="w-full rounded border-zinc-300"
+					bind:value={accountFilter}
+				>
+					<option value="">{m.all_accounts()}</option>
+					{#each accounts as account (account.id)}
+						<option value={account.id}>{account.name}</option>
+					{/each}
+				</select>
+			</label>
+			<label class="grid gap-1 text-sm font-medium text-zinc-700">
 				<span>{m.category()}</span>
 				<select class="w-full rounded border-zinc-300" bind:value={categoryFilter}>
 					<option value="">{m.all_categories()}</option>
@@ -297,6 +348,47 @@
 						<option value={category.id}>{category.name}</option>
 					{/each}
 				</select>
+			</label>
+			<label class="grid gap-1 text-sm font-medium text-zinc-700">
+				<span>{m.transaction_direction()}</span>
+				<select
+					aria-label={m.transaction_direction()}
+					class="w-full rounded border-zinc-300"
+					bind:value={transactionDirectionFilter}
+				>
+					<option value="">{m.all_directions()}</option>
+					{#each transactionDirectionOptions as option (option)}
+						<option value={option}>{transactionDirectionLabel(option)}</option>
+					{/each}
+				</select>
+			</label>
+			<div class="grid grid-cols-2 gap-3">
+				<label class="grid gap-1 text-sm font-medium text-zinc-700">
+					<span>{m.min_amount()}</span>
+					<input
+						aria-label={m.min_amount()}
+						class="w-full rounded border-zinc-300"
+						inputmode="decimal"
+						bind:value={minAmount}
+					/>
+				</label>
+				<label class="grid gap-1 text-sm font-medium text-zinc-700">
+					<span>{m.max_amount()}</span>
+					<input
+						aria-label={m.max_amount()}
+						class="w-full rounded border-zinc-300"
+						inputmode="decimal"
+						bind:value={maxAmount}
+					/>
+				</label>
+			</div>
+			<label class="grid gap-1 text-sm font-medium text-zinc-700">
+				<span>{m.tag_filter()}</span>
+				<input
+					aria-label={m.tag_filter()}
+					class="w-full rounded border-zinc-300"
+					bind:value={tagFilter}
+				/>
 			</label>
 			<div class="grid grid-cols-2 gap-3">
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
