@@ -49,6 +49,70 @@ describe('cashflow repository', () => {
 		]);
 	});
 
+	it('expands confirmed recurring payments from stale next dates by cadence', async () => {
+		const account = await createAccount(db, {
+			name: 'Main Giro',
+			currentBalanceCents: 150000
+		});
+		await insertRecurringPayment({
+			id: 'recurring-rent',
+			accountId: account.id,
+			categoryId: 'cat-housing',
+			payee: 'Rent',
+			cadence: 'monthly',
+			expectedAmountCents: 80000,
+			nextDate: '2026-05-20'
+		});
+		await insertRecurringPayment({
+			id: 'recurring-meal-plan',
+			accountId: account.id,
+			categoryId: 'cat-groceries',
+			payee: 'Meal Plan',
+			cadence: 'weekly',
+			expectedAmountCents: 1200,
+			nextDate: '2026-06-24'
+		});
+
+		const payments = await getUpcomingPayments(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null
+		});
+
+		expect(payments).toEqual([
+			expect.objectContaining({
+				id: 'recurring-meal-plan:2026-07-08',
+				payee: 'Meal Plan',
+				amountCents: 1200,
+				dueDate: '2026-07-08'
+			}),
+			expect.objectContaining({
+				id: 'recurring-meal-plan:2026-07-15',
+				payee: 'Meal Plan',
+				amountCents: 1200,
+				dueDate: '2026-07-15'
+			}),
+			expect.objectContaining({
+				id: 'recurring-rent:2026-07-20',
+				payee: 'Rent',
+				amountCents: 80000,
+				dueDate: '2026-07-20'
+			}),
+			expect.objectContaining({
+				id: 'recurring-meal-plan:2026-07-22',
+				payee: 'Meal Plan',
+				amountCents: 1200,
+				dueDate: '2026-07-22'
+			}),
+			expect.objectContaining({
+				id: 'recurring-meal-plan:2026-07-29',
+				payee: 'Meal Plan',
+				amountCents: 1200,
+				dueDate: '2026-07-29'
+			})
+		]);
+	});
+
 	it('projects balance before the next salary date', async () => {
 		await seedCashflow();
 
@@ -187,6 +251,52 @@ describe('cashflow repository', () => {
 			'Gym'
 		]);
 	});
+
+	it('includes recurring cadence occurrences in balance-before-salary projections', async () => {
+		const account = await createAccount(db, {
+			name: 'Main Giro',
+			currentBalanceCents: 150000
+		});
+		await createPlannedIncome(db, {
+			accountId: account.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+		await insertRecurringPayment({
+			id: 'recurring-weekly',
+			accountId: account.id,
+			payee: 'Weekly Box',
+			cadence: 'weekly',
+			expectedAmountCents: 2000,
+			nextDate: '2026-06-26'
+		});
+
+		const projection = await getBalanceBeforeSalaryProjection(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null
+		});
+
+		expect(projection).toMatchObject({
+			projectionDate: '2026-07-24',
+			currentBalanceCents: 150000,
+			upcomingPaymentCents: 6000,
+			projectedBalanceCents: 144000
+		});
+		expect(projection.upcomingPayments.map((payment) => payment.dueDate)).toEqual([
+			'2026-07-10',
+			'2026-07-17',
+			'2026-07-24'
+		]);
+		expect(projection.accountProjections).toEqual([
+			expect.objectContaining({
+				accountName: 'Main Giro',
+				upcomingPaymentCents: 6000,
+				projectedBalanceCents: 144000
+			})
+		]);
+	});
 });
 
 async function seedCashflow() {
@@ -276,6 +386,36 @@ async function seedCashflow() {
 			1999,
 			'2026-07-16',
 			'suggested',
+			90
+		)
+		.run();
+}
+
+async function insertRecurringPayment(input: {
+	id: string;
+	accountId: string;
+	categoryId?: string | null;
+	payee: string;
+	cadence: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
+	expectedAmountCents: number;
+	nextDate: string;
+}) {
+	await db
+		.prepare(
+			`INSERT INTO recurring_groups (
+				id, account_id, category_id, payee, cadence, expected_amount_cents,
+				next_date, status, confidence
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+		.bind(
+			input.id,
+			input.accountId,
+			input.categoryId ?? null,
+			input.payee,
+			input.cadence,
+			input.expectedAmountCents,
+			input.nextDate,
+			'confirmed',
 			90
 		)
 		.run();

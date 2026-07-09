@@ -6,6 +6,7 @@ import type {
 	UpcomingIncome,
 	UpcomingPayment
 } from './types';
+import type { RecurringCadence } from '../recurring/types';
 
 export async function getUpcomingPayments(
 	db: DbClient,
@@ -125,13 +126,14 @@ async function getRecurringPayments(
 		.prepare(
 			`${recurringPaymentSelect()}
 			WHERE rg.status = 'confirmed'
-				AND rg.next_date BETWEEN ? AND ?
+				AND rg.next_date IS NOT NULL
+				AND rg.next_date <= ?
 				AND COALESCE(c.type, 'expense') != 'income'`
 		)
-		.bind(from, to)
+		.bind(to)
 		.all<RecurringPaymentRow>();
 
-	return results.map(mapRecurringPayment);
+	return results.flatMap((row) => expandRecurringPayment(row, from, to));
 }
 
 async function getContractIncome(
@@ -241,7 +243,7 @@ function contractPaymentSelect(): string {
 function recurringPaymentSelect(): string {
 	return `SELECT
 		rg.id, rg.account_id, a.name AS account_name, rg.category_id, c.name AS category_name,
-		rg.payee, rg.expected_amount_cents AS amount_cents, rg.next_date AS due_date
+		rg.payee, rg.cadence, rg.expected_amount_cents AS amount_cents, rg.next_date AS due_date
 	FROM recurring_groups rg
 	LEFT JOIN accounts a ON a.id = rg.account_id
 	LEFT JOIN categories c ON c.id = rg.category_id`;
@@ -313,6 +315,30 @@ function mapRecurringPayment(row: RecurringPaymentRow): UpcomingPayment {
 	};
 }
 
+function expandRecurringPayment(
+	row: RecurringPaymentRow,
+	from: string,
+	to: string
+): UpcomingPayment[] {
+	const payments: UpcomingPayment[] = [];
+	let dueDate = row.due_date;
+
+	while (dueDate < from) {
+		dueDate = nextCadenceDate(dueDate, row.cadence);
+	}
+
+	while (dueDate <= to) {
+		payments.push({
+			...mapRecurringPayment(row),
+			id: `${row.id}:${dueDate}`,
+			dueDate
+		});
+		dueDate = nextCadenceDate(dueDate, row.cadence);
+	}
+
+	return payments;
+}
+
 function mapContractIncome(row: ContractIncomeRow): UpcomingIncome {
 	return {
 		id: row.id,
@@ -358,6 +384,29 @@ function previousDate(isoDate: string): string {
 	return date.toISOString().slice(0, 10);
 }
 
+function nextCadenceDate(isoDate: string, cadence: RecurringCadence): string {
+	const date = new Date(`${isoDate}T00:00:00.000Z`);
+	switch (cadence) {
+		case 'weekly':
+			date.setUTCDate(date.getUTCDate() + 7);
+			break;
+		case 'biweekly':
+			date.setUTCDate(date.getUTCDate() + 14);
+			break;
+		case 'monthly':
+			date.setUTCMonth(date.getUTCMonth() + 1);
+			break;
+		case 'quarterly':
+			date.setUTCMonth(date.getUTCMonth() + 3);
+			break;
+		case 'yearly':
+			date.setUTCFullYear(date.getUTCFullYear() + 1);
+			break;
+	}
+
+	return date.toISOString().slice(0, 10);
+}
+
 interface UpcomingPaymentRow extends DbRow {
 	id: string;
 	account_id: string | null;
@@ -400,6 +449,7 @@ interface RecurringPaymentRow extends DbRow {
 	category_id: string | null;
 	category_name: string | null;
 	payee: string;
+	cadence: RecurringCadence;
 	amount_cents: number;
 	due_date: string;
 }
