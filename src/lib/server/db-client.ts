@@ -23,6 +23,7 @@ export interface DbStatement {
 
 export interface DbClient {
 	prepare(sql: string): DbStatement;
+	batch?(statements: DbStatement[]): Promise<DbRunResult[]>;
 }
 
-export type D1DbClient = Pick<D1Database, 'prepare'>;
+export type D1DbClient = Pick<D1Database, 'prepare' | 'batch'>;

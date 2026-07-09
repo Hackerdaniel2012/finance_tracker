@@ -3,7 +3,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../accounts/error
 import { getProfile } from '../accounts/repository';
 import { listCategoryRules } from '../categories/repository';
 import type { CategoryRule } from '../categories/types';
-import type { DbClient, DbRow } from '../db-client';
+import type { DbClient, DbRow, DbStatement } from '../db-client';
 import { generateRecurringSuggestions } from '../recurring/repository';
 import { getDateRange, sha256Hex } from './shared';
 import type { ConfirmImportInput, ImportReport } from './types';
@@ -47,18 +47,20 @@ export async function confirmImport(
 	const rules = await listCategoryRules(db);
 	let unknownCount = 0;
 
-	await createBatch(db, {
-		batchId,
-		profileId: profile.id,
-		fileHash,
-		adapterId: adapter.id,
-		startDate,
-		endDate,
-		rowCount: parsed.rows.length,
-		importedCount: insertableRows.rows.length,
-		duplicateCount: insertableRows.duplicateCount,
-		errorCount: parsed.errors.length
-	});
+	const writeStatements: DbStatement[] = [
+		createBatchStatement(db, {
+			batchId,
+			profileId: profile.id,
+			fileHash,
+			adapterId: adapter.id,
+			startDate,
+			endDate,
+			rowCount: parsed.rows.length,
+			importedCount: insertableRows.rows.length,
+			duplicateCount: insertableRows.duplicateCount,
+			errorCount: parsed.errors.length
+		})
+	];
 
 	for (const row of insertableRows.rows) {
 		const match = matchCategoryRule(row, rules);
@@ -69,25 +71,28 @@ export async function confirmImport(
 			unknownCount += 1;
 		}
 
-		await insertTransaction(db, {
-			transactionId,
-			profileId: profile.id,
-			accountId: profile.accountId,
-			batchId,
-			categoryId: match?.categoryId ?? null,
-			classificationStatus,
-			row
-		});
+		writeStatements.push(
+			insertTransactionStatement(db, {
+				transactionId,
+				profileId: profile.id,
+				accountId: profile.accountId,
+				batchId,
+				categoryId: match?.categoryId ?? null,
+				classificationStatus,
+				row
+			})
+		);
 
 		if (!match) {
-			await insertReviewFlag(db, transactionId);
+			writeStatements.push(insertReviewFlagStatement(db, transactionId));
 		}
 	}
 
 	for (const error of parsed.errors) {
-		await insertRowError(db, batchId, profile.id, error);
+		writeStatements.push(insertRowErrorStatement(db, batchId, profile.id, error));
 	}
 
+	await runImportWriteBatch(db, writeStatements);
 	await generateRecurringSuggestions(db);
 
 	return {
@@ -103,6 +108,18 @@ export async function confirmImport(
 		errorCount: parsed.errors.length,
 		unknownCount
 	};
+}
+
+async function runImportWriteBatch(db: DbClient, statements: DbStatement[]): Promise<void> {
+	if (statements.length === 0) {
+		return;
+	}
+
+	if (!db.batch) {
+		throw new Error('Database batch support is required for atomic import confirmation');
+	}
+
+	await db.batch(statements);
 }
 
 async function assertNewFileHash(db: DbClient, profileId: string, fileHash: string): Promise<void> {
@@ -180,7 +197,7 @@ async function getExistingDedupeKeys(
 	return existingKeys;
 }
 
-async function createBatch(
+function createBatchStatement(
 	db: DbClient,
 	input: {
 		batchId: string;
@@ -194,8 +211,8 @@ async function createBatch(
 		duplicateCount: number;
 		errorCount: number;
 	}
-): Promise<void> {
-	await db
+): DbStatement {
+	return db
 		.prepare(
 			`INSERT INTO import_batches (
 				id, profile_id, file_hash, adapter_id, start_date, end_date,
@@ -213,11 +230,10 @@ async function createBatch(
 			input.importedCount,
 			input.duplicateCount,
 			input.errorCount
-		)
-		.run();
+		);
 }
 
-async function insertTransaction(
+function insertTransactionStatement(
 	db: DbClient,
 	input: {
 		transactionId: string;
@@ -228,8 +244,8 @@ async function insertTransaction(
 		classificationStatus: 'auto' | 'unknown';
 		row: NormalizedTransaction;
 	}
-): Promise<void> {
-	await db
+): DbStatement {
+	return db
 		.prepare(
 			`INSERT INTO transactions (
 				id, profile_id, account_id, import_batch_id, category_id, dedupe_key,
@@ -258,33 +274,30 @@ async function insertTransaction(
 			input.row.note ?? null,
 			input.row.searchText,
 			input.classificationStatus
-		)
-		.run();
+		);
 }
 
-async function insertReviewFlag(db: DbClient, transactionId: string): Promise<void> {
-	await db
+function insertReviewFlagStatement(db: DbClient, transactionId: string): DbStatement {
+	return db
 		.prepare(
 			`INSERT INTO transaction_review_flags (id, transaction_id, reason)
 			VALUES (?, ?, ?)`
 		)
-		.bind(crypto.randomUUID(), transactionId, 'unknown_category')
-		.run();
+		.bind(crypto.randomUUID(), transactionId, 'unknown_category');
 }
 
-async function insertRowError(
+function insertRowErrorStatement(
 	db: DbClient,
 	batchId: string,
 	profileId: string,
 	error: ParseError
-): Promise<void> {
-	await db
+): DbStatement {
+	return db
 		.prepare(
 			`INSERT INTO import_row_errors (id, import_batch_id, profile_id, row_number, code, message)
 			VALUES (?, ?, ?, ?, ?, ?)`
 		)
-		.bind(crypto.randomUUID(), batchId, profileId, error.rowNumber, error.code, error.message)
-		.run();
+		.bind(crypto.randomUUID(), batchId, profileId, error.rowNumber, error.code, error.message);
 }
 
 function matchCategoryRule(

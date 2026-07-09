@@ -46,6 +46,20 @@ export function createTestDbClient(db: Database): DbClient {
 	return {
 		prepare(sql) {
 			return new SqlJsStatement(db, sql);
+		},
+		async batch(statements) {
+			db.run('BEGIN');
+			try {
+				const results: DbRunResult[] = [];
+				for (const statement of statements) {
+					results.push(await statement.run());
+				}
+				db.run('COMMIT');
+				return results;
+			} catch (error) {
+				db.run('ROLLBACK');
+				throw error;
+			}
 		}
 	};
 }
