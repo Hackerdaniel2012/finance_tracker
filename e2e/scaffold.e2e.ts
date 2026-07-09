@@ -56,6 +56,9 @@ test('renders the category review shell', async ({ page }) => {
 	await expect(
 		page.getByRole('heading', { name: /unknown review queue|unbekannte transaktionen/i })
 	).toBeVisible();
+	await expect(page.getByLabel(/search transactions|transaktionen suchen/i)).toBeVisible();
+	await expect(page.getByRole('button', { name: /previous|zurueck/i })).toBeVisible();
+	await expect(page.getByRole('button', { name: /next|weiter/i })).toBeVisible();
 	await expect(page.getByRole('heading', { name: /categories|kategorien/i })).toBeVisible();
 	await expect(
 		page.getByRole('heading', { name: /category rules|kategorieregeln/i })

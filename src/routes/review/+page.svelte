@@ -60,6 +60,9 @@
 	let selectedTransaction = $state<Transaction | null>(null);
 	let selectedCategory = $state<Category | null>(null);
 	let selectedRule = $state<CategoryRule | null>(null);
+	let unknownSearch = $state('');
+	let unknownOffset = $state(0);
+	let unknownPagination = $state({ total: 0, limit: 10, offset: 0 });
 	let transactionCategoryId = $state('');
 	let transactionNote = $state('');
 	let transactionTags = $state('');
@@ -83,7 +86,17 @@
 	let isSavingCategory = $state(false);
 	let isSavingRule = $state(false);
 
-	const openReviewCount = $derived(unknownTransactions.length);
+	const openReviewCount = $derived(unknownPagination.total);
+	const canGoToPreviousUnknownPage = $derived(unknownPagination.offset > 0);
+	const canGoToNextUnknownPage = $derived(
+		unknownPagination.offset + unknownPagination.limit < unknownPagination.total
+	);
+	const unknownPageStart = $derived(
+		unknownPagination.total === 0 ? 0 : unknownPagination.offset + 1
+	);
+	const unknownPageEnd = $derived(
+		Math.min(unknownPagination.offset + unknownPagination.limit, unknownPagination.total)
+	);
 
 	onMount(() => {
 		void loadReviewState();
@@ -97,12 +110,13 @@
 			const [categoryPayload, rulePayload, unknownPayload] = await Promise.all([
 				fetchJson<{ categories: Category[] }>('/api/categories'),
 				fetchJson<{ rules: CategoryRule[] }>('/api/category-rules'),
-				fetchJson<TransactionListResult>('/api/transactions/unknown?limit=50')
+				fetchJson<TransactionListResult>(`/api/transactions/unknown${buildUnknownQueueQuery()}`)
 			]);
 
 			categories = categoryPayload.categories;
 			rules = rulePayload.rules;
 			unknownTransactions = unknownPayload.transactions;
+			unknownPagination = unknownPayload.pagination;
 			ruleCategoryId = ruleCategoryId || categories[0]?.id || '';
 			transactionCategoryId = transactionCategoryId || categories[0]?.id || '';
 			status = m.review_status_ready();
@@ -110,6 +124,25 @@
 			status = m.review_status_error();
 			error = m.review_status_error();
 		}
+	}
+
+	async function searchUnknownTransactions(event: SubmitEvent) {
+		event.preventDefault();
+		unknownOffset = 0;
+		selectedTransaction = null;
+		await loadReviewState();
+	}
+
+	async function goToPreviousUnknownPage() {
+		unknownOffset = Math.max(0, unknownOffset - unknownPagination.limit);
+		selectedTransaction = null;
+		await loadReviewState();
+	}
+
+	async function goToNextUnknownPage() {
+		unknownOffset = unknownOffset + unknownPagination.limit;
+		selectedTransaction = null;
+		await loadReviewState();
 	}
 
 	function selectTransaction(transaction: Transaction) {
@@ -300,6 +333,18 @@
 		return Number.isInteger(parsed) ? parsed : 100;
 	}
 
+	function buildUnknownQueueQuery(): string {
+		const params = [
+			['limit', String(unknownPagination.limit)],
+			['offset', String(unknownOffset)]
+		];
+		if (unknownSearch.trim()) params.push(['search', unknownSearch.trim()]);
+
+		return `?${params
+			.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+			.join('&')}`;
+	}
+
 	function categoryNameFor(id: string): string {
 		return categories.find((category) => category.id === id)?.name ?? m.uncategorized();
 	}
@@ -363,11 +408,34 @@
 	<section class="grid gap-6 xl:grid-cols-[1fr_24rem]">
 		<section class="rounded border border-zinc-200 bg-white shadow-sm">
 			<div class="border-b border-zinc-200 p-5">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.unknown_review_queue()}</h2>
-				<p class="mt-1 text-sm text-zinc-500">
-					{openReviewCount}
-					{m.open_items()}
-				</p>
+				<div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+					<div>
+						<h2 class="text-lg font-semibold text-zinc-950">{m.unknown_review_queue()}</h2>
+						<p class="mt-1 text-sm text-zinc-500">
+							{openReviewCount}
+							{m.open_items()}
+						</p>
+					</div>
+					<form
+						class="flex flex-col gap-2 sm:flex-row sm:items-end"
+						onsubmit={searchUnknownTransactions}
+					>
+						<label class="grid gap-1 text-sm font-medium text-zinc-700">
+							<span>{m.search_transactions()}</span>
+							<input
+								class="w-full rounded border-zinc-300 sm:w-64"
+								aria-label={m.search_transactions()}
+								bind:value={unknownSearch}
+							/>
+						</label>
+						<button
+							class="rounded border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-950"
+							type="submit"
+						>
+							{m.apply_filters()}
+						</button>
+					</form>
+				</div>
 			</div>
 
 			{#if unknownTransactions.length === 0}
@@ -397,6 +465,31 @@
 					{/each}
 				</div>
 			{/if}
+			<div
+				class="flex flex-col gap-3 border-t border-zinc-200 p-5 sm:flex-row sm:items-center sm:justify-between"
+			>
+				<p class="text-sm text-zinc-500">
+					{unknownPageStart}-{unknownPageEnd} / {unknownPagination.total}
+				</p>
+				<div class="flex gap-2">
+					<button
+						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-50"
+						type="button"
+						disabled={!canGoToPreviousUnknownPage}
+						onclick={goToPreviousUnknownPage}
+					>
+						{m.previous_page()}
+					</button>
+					<button
+						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-50"
+						type="button"
+						disabled={!canGoToNextUnknownPage}
+						onclick={goToNextUnknownPage}
+					>
+						{m.next_page()}
+					</button>
+				</div>
+			</div>
 		</section>
 
 		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
