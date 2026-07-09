@@ -95,6 +95,45 @@ describe('/api/balance-before-salary', () => {
 		});
 	});
 
+	it('returns a projection scoped to an account', async () => {
+		const main = await createAccount(db, { name: 'Main Giro', currentBalanceCents: 150000 });
+		const savings = await createAccount(db, { name: 'Savings', currentBalanceCents: 70000 });
+		await createPlannedPayment(db, {
+			accountId: main.id,
+			payee: 'Rent',
+			amountCents: 80000,
+			dueDate: '2026-07-20'
+		});
+		await createPlannedPayment(db, {
+			accountId: savings.id,
+			payee: 'Insurance',
+			amountCents: 20000,
+			dueDate: '2026-07-21'
+		});
+
+		const response = await GET(
+			event(`http://localhost/api/balance-before-salary?asOf=2026-07-08&accountId=${savings.id}`)
+		);
+
+		await expect(response.json()).resolves.toMatchObject({
+			projection: {
+				currentBalanceCents: 70000,
+				upcomingPaymentCents: 20000,
+				projectedBalanceCents: 50000,
+				nextIncome: null,
+				accountProjections: [
+					{
+						accountId: savings.id,
+						accountName: 'Savings',
+						currentBalanceCents: 70000,
+						upcomingPaymentCents: 20000,
+						projectedBalanceCents: 50000
+					}
+				]
+			}
+		});
+	});
+
 	it('returns validation errors for invalid manual next salary dates', async () => {
 		const malformed = await GET(
 			event('http://localhost/api/balance-before-salary?asOf=2026-07-08&nextSalaryDate=bad')
@@ -111,6 +150,15 @@ describe('/api/balance-before-salary', () => {
 		await expect(past.json()).resolves.toEqual({
 			error: 'nextSalaryDate must be after asOf'
 		});
+	});
+
+	it('returns validation errors for empty accountId', async () => {
+		const response = await GET(
+			event('http://localhost/api/balance-before-salary?asOf=2026-07-08&accountId=')
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toEqual({ error: 'accountId must not be empty' });
 	});
 });
 

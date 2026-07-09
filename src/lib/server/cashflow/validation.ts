@@ -7,6 +7,7 @@ export function parseCashflowWindow(url: URL, today = new Date()): CashflowWindo
 	const asOf = optionalDate(url.searchParams.get('asOf'), 'asOf') ?? toIsoDate(today);
 	const nextSalaryDate =
 		optionalDate(url.searchParams.get('nextSalaryDate'), 'nextSalaryDate') ?? null;
+	const accountId = optionalQueryString(url, 'accountId');
 
 	if (nextSalaryDate !== null && nextSalaryDate <= asOf) {
 		throw new ValidationError('nextSalaryDate must be after asOf');
@@ -15,8 +16,17 @@ export function parseCashflowWindow(url: URL, today = new Date()): CashflowWindo
 	return {
 		asOf,
 		monthEnd: endOfMonth(asOf),
-		nextSalaryDate
+		nextSalaryDate,
+		accountId
 	};
+}
+
+function optionalQueryString(url: URL, field: string): string | undefined {
+	const value = url.searchParams.get(field)?.trim();
+	if (value === '') {
+		throw new ValidationError(`${field} must not be empty`);
+	}
+	return value || undefined;
 }
 
 function optionalDate(value: string | null, field: string): string | undefined {

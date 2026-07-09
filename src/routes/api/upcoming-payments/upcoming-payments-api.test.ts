@@ -37,6 +37,31 @@ describe('/api/upcoming-payments', () => {
 		});
 	});
 
+	it('returns payments scoped to an account', async () => {
+		const main = await createAccount(db, { name: 'Main Giro' });
+		const savings = await createAccount(db, { name: 'Savings' });
+		await createPlannedPayment(db, {
+			accountId: main.id,
+			payee: 'Power Co',
+			amountCents: 9000,
+			dueDate: '2026-07-10'
+		});
+		await createPlannedPayment(db, {
+			accountId: savings.id,
+			payee: 'Insurance Co',
+			amountCents: 4500,
+			dueDate: '2026-07-12'
+		});
+
+		const response = await GET(
+			event(`http://localhost/api/upcoming-payments?asOf=2026-07-08&accountId=${main.id}`)
+		);
+
+		await expect(response.json()).resolves.toMatchObject({
+			upcomingPayments: [{ payee: 'Power Co', amountCents: 9000, dueDate: '2026-07-10' }]
+		});
+	});
+
 	it('returns validation errors for bad asOf dates', async () => {
 		const response = await GET(event('http://localhost/api/upcoming-payments?asOf=bad'));
 
@@ -49,6 +74,15 @@ describe('/api/upcoming-payments', () => {
 
 		expect(response.status).toBe(400);
 		await expect(response.json()).resolves.toEqual({ error: 'asOf must be an ISO date' });
+	});
+
+	it('returns validation errors for empty accountId', async () => {
+		const response = await GET(
+			event('http://localhost/api/upcoming-payments?asOf=2026-07-08&accountId=')
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toEqual({ error: 'accountId must not be empty' });
 	});
 });
 

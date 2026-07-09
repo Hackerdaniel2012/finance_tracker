@@ -297,6 +297,112 @@ describe('cashflow repository', () => {
 			})
 		]);
 	});
+
+	it('filters upcoming payments by account', async () => {
+		const main = await createAccount(db, { name: 'Main Giro' });
+		const savings = await createAccount(db, { name: 'Savings' });
+		await createPlannedPayment(db, {
+			accountId: main.id,
+			payee: 'Rent',
+			amountCents: 80000,
+			dueDate: '2026-07-20'
+		});
+		await createPlannedPayment(db, {
+			accountId: savings.id,
+			payee: 'Insurance',
+			amountCents: 20000,
+			dueDate: '2026-07-21'
+		});
+
+		const payments = await getUpcomingPayments(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null,
+			accountId: main.id
+		});
+
+		expect(payments).toEqual([expect.objectContaining({ payee: 'Rent', accountId: main.id })]);
+	});
+
+	it('filters upcoming income by account', async () => {
+		const main = await createAccount(db, { name: 'Main Giro' });
+		const savings = await createAccount(db, { name: 'Savings' });
+		await createPlannedIncome(db, {
+			accountId: main.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+		await createPlannedIncome(db, {
+			accountId: savings.id,
+			payer: 'Side hustle',
+			amountCents: 50000,
+			dueDate: '2026-07-26'
+		});
+
+		const income = await getUpcomingIncome(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null,
+			accountId: savings.id
+		});
+
+		expect(income).toEqual([
+			expect.objectContaining({ payer: 'Side hustle', accountId: savings.id })
+		]);
+	});
+
+	it('filters balance-before-salary projection by account', async () => {
+		const main = await createAccount(db, {
+			name: 'Main Giro',
+			currentBalanceCents: 150000
+		});
+		const savings = await createAccount(db, {
+			name: 'Savings',
+			currentBalanceCents: 70000
+		});
+		await createPlannedPayment(db, {
+			accountId: main.id,
+			payee: 'Rent',
+			amountCents: 80000,
+			dueDate: '2026-07-20'
+		});
+		await createPlannedPayment(db, {
+			accountId: savings.id,
+			payee: 'Insurance',
+			amountCents: 20000,
+			dueDate: '2026-07-21'
+		});
+		await createPlannedIncome(db, {
+			accountId: main.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+
+		const projection = await getBalanceBeforeSalaryProjection(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null,
+			accountId: savings.id
+		});
+
+		expect(projection).toMatchObject({
+			currentBalanceCents: 70000,
+			upcomingPaymentCents: 20000,
+			projectedBalanceCents: 50000,
+			nextIncome: null
+		});
+		expect(projection.upcomingPayments.map((payment) => payment.payee)).toEqual(['Insurance']);
+		expect(projection.accountProjections).toEqual([
+			expect.objectContaining({
+				accountName: 'Savings',
+				currentBalanceCents: 70000,
+				upcomingPaymentCents: 20000,
+				projectedBalanceCents: 50000
+			})
+		]);
+	});
 });
 
 async function seedCashflow() {

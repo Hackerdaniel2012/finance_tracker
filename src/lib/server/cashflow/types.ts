@@ -2,6 +2,7 @@ export interface CashflowWindow {
 	asOf: string;
 	monthEnd: string;
 	nextSalaryDate: string | null;
+	accountId?: string;
 }
 
 export interface UpcomingPayment {

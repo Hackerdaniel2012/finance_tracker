@@ -36,6 +36,40 @@ describe('/api/upcoming-income', () => {
 			upcomingIncome: [{ payer: 'Employer', amountCents: 250000, dueDate: '2026-07-25' }]
 		});
 	});
+
+	it('returns income scoped to an account', async () => {
+		const main = await createAccount(db, { name: 'Main Giro' });
+		const savings = await createAccount(db, { name: 'Savings' });
+		await createPlannedIncome(db, {
+			accountId: main.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+		await createPlannedIncome(db, {
+			accountId: savings.id,
+			payer: 'Side hustle',
+			amountCents: 50000,
+			dueDate: '2026-07-26'
+		});
+
+		const response = await GET(
+			event(`http://localhost/api/upcoming-income?asOf=2026-07-08&accountId=${savings.id}`)
+		);
+
+		await expect(response.json()).resolves.toMatchObject({
+			upcomingIncome: [{ payer: 'Side hustle', amountCents: 50000, dueDate: '2026-07-26' }]
+		});
+	});
+
+	it('returns validation errors for empty accountId', async () => {
+		const response = await GET(
+			event('http://localhost/api/upcoming-income?asOf=2026-07-08&accountId=')
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toEqual({ error: 'accountId must not be empty' });
+	});
 });
 
 function event(url: string) {

@@ -13,9 +13,9 @@ export async function getUpcomingPayments(
 	window: CashflowWindow
 ): Promise<UpcomingPayment[]> {
 	const [plannedPayments, contractPayments, recurringPayments] = await Promise.all([
-		getPlannedPayments(db, window.asOf, window.monthEnd),
-		getContractPayments(db, window.asOf, window.monthEnd),
-		getRecurringPayments(db, window.asOf, window.monthEnd)
+		getPlannedPayments(db, window),
+		getContractPayments(db, window),
+		getRecurringPayments(db, window)
 	]);
 
 	return [...plannedPayments, ...contractPayments, ...recurringPayments].sort(comparePayments);
@@ -26,8 +26,8 @@ export async function getUpcomingIncome(
 	window: CashflowWindow
 ): Promise<UpcomingIncome[]> {
 	const [plannedIncome, contractIncome] = await Promise.all([
-		getPlannedIncome(db, window.asOf, window.monthEnd),
-		getContractIncome(db, window.asOf, window.monthEnd)
+		getPlannedIncome(db, window),
+		getContractIncome(db, window)
 	]);
 
 	return [...plannedIncome, ...contractIncome].sort(compareIncome);
@@ -39,11 +39,16 @@ export async function getBalanceBeforeSalaryProjection(
 ): Promise<BalanceBeforeSalaryProjection> {
 	const [nextIncome, accountBalances] = await Promise.all([
 		getNextIncome(db, window),
-		getAccountBalances(db, window.asOf)
+		getAccountBalances(db, window.asOf, window.accountId)
 	]);
 	const salaryDate = window.nextSalaryDate ?? nextIncome?.dueDate ?? null;
 	const projectionDate = salaryDate ? previousDate(salaryDate) : window.monthEnd;
-	const upcomingPayments = await getPaymentsThroughDate(db, window.asOf, projectionDate);
+	const upcomingPayments = await getPaymentsThroughDate(
+		db,
+		window.asOf,
+		projectionDate,
+		window.accountId
+	);
 	const upcomingPaymentCents = upcomingPayments.reduce(
 		(sum, payment) => sum + payment.amountCents,
 		0
@@ -71,29 +76,32 @@ export async function getBalanceBeforeSalaryProjection(
 
 async function getPlannedPayments(
 	db: DbClient,
-	from: string,
-	to: string
+	window: CashflowWindow
 ): Promise<UpcomingPayment[]> {
+	const accountClause = window.accountId ? 'AND p.account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`${plannedPaymentSelect()}
 			WHERE p.status = 'planned'
-				AND p.due_date BETWEEN ? AND ?`
+				AND p.due_date BETWEEN ? AND ?
+				${accountClause}`
 		)
-		.bind(from, to)
+		.bind(window.asOf, window.monthEnd, ...(window.accountId ? [window.accountId] : []))
 		.all<UpcomingPaymentRow>();
 
 	return results.map(mapUpcomingPayment);
 }
 
-async function getPlannedIncome(db: DbClient, from: string, to: string): Promise<UpcomingIncome[]> {
+async function getPlannedIncome(db: DbClient, window: CashflowWindow): Promise<UpcomingIncome[]> {
+	const accountClause = window.accountId ? 'AND i.account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`${plannedIncomeSelect()}
 			WHERE i.status = 'planned'
-				AND i.due_date BETWEEN ? AND ?`
+				AND i.due_date BETWEEN ? AND ?
+				${accountClause}`
 		)
-		.bind(from, to)
+		.bind(window.asOf, window.monthEnd, ...(window.accountId ? [window.accountId] : []))
 		.all<UpcomingIncomeRow>();
 
 	return results.map(mapUpcomingIncome);
@@ -101,17 +109,18 @@ async function getPlannedIncome(db: DbClient, from: string, to: string): Promise
 
 async function getContractPayments(
 	db: DbClient,
-	from: string,
-	to: string
+	window: CashflowWindow
 ): Promise<UpcomingPayment[]> {
+	const accountClause = window.accountId ? 'AND c.account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`${contractPaymentSelect()}
 			WHERE c.status = 'active'
 				AND c.kind IN ('fixed_cost', 'subscription', 'other')
-				AND c.next_date BETWEEN ? AND ?`
+				AND c.next_date BETWEEN ? AND ?
+				${accountClause}`
 		)
-		.bind(from, to)
+		.bind(window.asOf, window.monthEnd, ...(window.accountId ? [window.accountId] : []))
 		.all<ContractPaymentRow>();
 
 	return results.map(mapContractPayment);
@@ -119,36 +128,35 @@ async function getContractPayments(
 
 async function getRecurringPayments(
 	db: DbClient,
-	from: string,
-	to: string
+	window: CashflowWindow
 ): Promise<UpcomingPayment[]> {
+	const accountClause = window.accountId ? 'AND rg.account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`${recurringPaymentSelect()}
 			WHERE rg.status = 'confirmed'
 				AND rg.next_date IS NOT NULL
 				AND rg.next_date <= ?
-				AND COALESCE(c.type, 'expense') != 'income'`
+				AND COALESCE(c.type, 'expense') != 'income'
+				${accountClause}`
 		)
-		.bind(to)
+		.bind(window.monthEnd, ...(window.accountId ? [window.accountId] : []))
 		.all<RecurringPaymentRow>();
 
-	return results.flatMap((row) => expandRecurringPayment(row, from, to));
+	return results.flatMap((row) => expandRecurringPayment(row, window.asOf, window.monthEnd));
 }
 
-async function getContractIncome(
-	db: DbClient,
-	from: string,
-	to: string
-): Promise<UpcomingIncome[]> {
+async function getContractIncome(db: DbClient, window: CashflowWindow): Promise<UpcomingIncome[]> {
+	const accountClause = window.accountId ? 'AND c.account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`${contractIncomeSelect()}
 			WHERE c.status = 'active'
 				AND c.kind IN ('salary', 'income')
-				AND c.next_date BETWEEN ? AND ?`
+				AND c.next_date BETWEEN ? AND ?
+				${accountClause}`
 		)
-		.bind(from, to)
+		.bind(window.asOf, window.monthEnd, ...(window.accountId ? [window.accountId] : []))
 		.all<ContractIncomeRow>();
 
 	return results.map(mapContractIncome);
@@ -162,7 +170,8 @@ async function getNextIncome(db: DbClient, window: CashflowWindow): Promise<Upco
 async function getPaymentsThroughDate(
 	db: DbClient,
 	from: string,
-	to: string
+	to: string,
+	accountId?: string
 ): Promise<UpcomingPayment[]> {
 	if (to < from) {
 		return [];
@@ -171,12 +180,18 @@ async function getPaymentsThroughDate(
 	const payments = await getUpcomingPayments(db, {
 		asOf: from,
 		monthEnd: to,
-		nextSalaryDate: null
+		nextSalaryDate: null,
+		accountId
 	});
 	return payments.filter((payment) => payment.dueDate <= to);
 }
 
-async function getAccountBalances(db: DbClient, asOf: string): Promise<AccountBalanceRow[]> {
+async function getAccountBalances(
+	db: DbClient,
+	asOf: string,
+	accountId?: string
+): Promise<AccountBalanceRow[]> {
+	const accountFilter = accountId ? 'WHERE account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT
@@ -204,9 +219,10 @@ async function getAccountBalances(db: DbClient, asOf: string): Promise<AccountBa
 				WHERE a.current_balance_cents IS NULL
 				GROUP BY a.id, a.name, a.opening_balance_cents, a.display_order, a.created_at
 			)
+			${accountFilter}
 			ORDER BY display_order ASC, created_at ASC`
 		)
-		.bind(asOf)
+		.bind(asOf, ...(accountId ? [accountId] : []))
 		.all<AccountBalanceRow>();
 
 	return results;
