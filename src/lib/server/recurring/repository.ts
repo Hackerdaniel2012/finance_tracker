@@ -2,8 +2,17 @@ import { NotFoundError } from '../accounts/errors';
 import type { DbClient, DbRow } from '../db-client';
 import type { RecurringGroup, UpdateRecurringGroupInput } from './types';
 
-const monthlyCadenceMinDays = 27;
-const monthlyCadenceMaxDays = 34;
+const cadenceWindows: Array<{
+	cadence: RecurringGroup['cadence'];
+	minDays: number;
+	maxDays: number;
+}> = [
+	{ cadence: 'weekly', minDays: 6, maxDays: 8 },
+	{ cadence: 'biweekly', minDays: 13, maxDays: 15 },
+	{ cadence: 'monthly', minDays: 27, maxDays: 34 },
+	{ cadence: 'quarterly', minDays: 86, maxDays: 96 },
+	{ cadence: 'yearly', minDays: 360, maxDays: 370 }
+];
 const amountToleranceCents = 100;
 const amountToleranceRatio = 0.05;
 
@@ -20,17 +29,18 @@ export async function generateRecurringSuggestions(db: DbClient): Promise<Recurr
 	const suggestions: RecurringGroup[] = [];
 
 	for (const candidate of candidates) {
-		if (!isMonthlyCandidate(candidate.transactions)) {
+		const pattern = inferRecurringPattern(candidate.transactions);
+		if (!pattern) {
 			continue;
 		}
 
-		const existing = await getExistingRecurringGroup(db, candidate);
+		const existing = await getExistingRecurringGroup(db, candidate, pattern.cadence);
 		if (existing) {
 			continue;
 		}
 
 		const groupId = crypto.randomUUID();
-		await insertRecurringSuggestion(db, groupId, candidate);
+		await insertRecurringSuggestion(db, groupId, candidate, pattern);
 		await linkRecurringTransactions(db, groupId, candidate.transactions);
 		const suggestion = await getRecurringGroup(db, groupId);
 		if (suggestion) {
@@ -136,9 +146,9 @@ function groupRecurringCandidates(rows: CandidateTransactionRow[]): RecurringCan
 	return [...groups.values()];
 }
 
-function isMonthlyCandidate(transactions: CandidateTransactionRow[]): boolean {
+function inferRecurringPattern(transactions: CandidateTransactionRow[]): RecurringPattern | null {
 	if (transactions.length < 3) {
-		return false;
+		return null;
 	}
 
 	const sorted = [...transactions].sort((a, b) => a.booking_date.localeCompare(b.booking_date));
@@ -152,46 +162,52 @@ function isMonthlyCandidate(transactions: CandidateTransactionRow[]): boolean {
 				Math.max(amountToleranceCents, expectedAmount * amountToleranceRatio)
 		)
 	) {
-		return false;
+		return null;
 	}
 
 	const intervals = [
 		daysBetween(recent[0].booking_date, recent[1].booking_date),
 		daysBetween(recent[1].booking_date, recent[2].booking_date)
 	];
+	const cadence = cadenceWindows.find((window) =>
+		intervals.every((interval) => interval >= window.minDays && interval <= window.maxDays)
+	)?.cadence;
 
-	return intervals.every(
-		(interval) => interval >= monthlyCadenceMinDays && interval <= monthlyCadenceMaxDays
-	);
+	if (!cadence) {
+		return null;
+	}
+
+	return {
+		cadence,
+		expectedAmountCents: Math.round(expectedAmount),
+		nextDate: nextCadenceDate(recent.at(-1)?.booking_date ?? null, cadence)
+	};
 }
 
 async function getExistingRecurringGroup(
 	db: DbClient,
-	candidate: RecurringCandidate
+	candidate: RecurringCandidate,
+	cadence: RecurringGroup['cadence']
 ): Promise<IdRow | null> {
 	return db
 		.prepare(
 			`SELECT id
 			FROM recurring_groups
 			WHERE account_id = ?
-				AND cadence = 'monthly'
+				AND cadence = ?
 				AND LOWER(TRIM(payee)) = ?
 			LIMIT 1`
 		)
-		.bind(candidate.accountId, normalizePayee(candidate.payee))
+		.bind(candidate.accountId, cadence, normalizePayee(candidate.payee))
 		.first<IdRow>();
 }
 
 async function insertRecurringSuggestion(
 	db: DbClient,
 	groupId: string,
-	candidate: RecurringCandidate
+	candidate: RecurringCandidate,
+	pattern: RecurringPattern
 ): Promise<void> {
-	const recent = latestThreeTransactions(candidate.transactions);
-	const expectedAmountCents = Math.round(
-		average(recent.map((transaction) => Math.abs(transaction.amount_cents)))
-	);
-
 	await db
 		.prepare(
 			`INSERT INTO recurring_groups (
@@ -205,9 +221,9 @@ async function insertRecurringSuggestion(
 			candidate.profileId,
 			candidate.categoryId,
 			candidate.payee,
-			'monthly',
-			expectedAmountCents,
-			nextMonthlyDate(recent.at(-1)?.booking_date ?? null),
+			pattern.cadence,
+			pattern.expectedAmountCents,
+			pattern.nextDate,
 			'suggested',
 			90,
 			'imported'
@@ -310,13 +326,30 @@ function daysBetween(from: string, to: string): number {
 	return Math.round((toDate.getTime() - fromDate.getTime()) / 86_400_000);
 }
 
-function nextMonthlyDate(date: string | null): string | null {
+function nextCadenceDate(date: string | null, cadence: RecurringGroup['cadence']): string | null {
 	if (!date) {
 		return null;
 	}
 
 	const next = new Date(`${date}T00:00:00.000Z`);
-	next.setUTCMonth(next.getUTCMonth() + 1);
+	switch (cadence) {
+		case 'weekly':
+			next.setUTCDate(next.getUTCDate() + 7);
+			break;
+		case 'biweekly':
+			next.setUTCDate(next.getUTCDate() + 14);
+			break;
+		case 'monthly':
+			next.setUTCMonth(next.getUTCMonth() + 1);
+			break;
+		case 'quarterly':
+			next.setUTCMonth(next.getUTCMonth() + 3);
+			break;
+		case 'yearly':
+			next.setUTCFullYear(next.getUTCFullYear() + 1);
+			break;
+	}
+
 	return next.toISOString().slice(0, 10);
 }
 
@@ -379,6 +412,12 @@ interface RecurringCandidate {
 	categoryId: string | null;
 	payee: string;
 	transactions: CandidateTransactionRow[];
+}
+
+interface RecurringPattern {
+	cadence: RecurringGroup['cadence'];
+	expectedAmountCents: number;
+	nextDate: string | null;
 }
 
 interface IdRow extends DbRow {

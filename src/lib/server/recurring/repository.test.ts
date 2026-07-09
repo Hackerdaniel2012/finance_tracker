@@ -141,6 +141,63 @@ describe('recurring repository', () => {
 		await expect(generateRecurringSuggestions(db)).resolves.toEqual([]);
 	});
 
+	it('suggests weekly, biweekly, quarterly, and yearly recurring groups', async () => {
+		const account = await createAccount(db, { name: 'Main Giro' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'N26 Main'
+		});
+		await insertStableSeries(account.id, profile.id, 'Weekly News', [
+			'2026-06-01',
+			'2026-06-08',
+			'2026-06-15'
+		]);
+		await insertStableSeries(account.id, profile.id, 'Biweekly Cleaning', [
+			'2026-06-02',
+			'2026-06-16',
+			'2026-06-30'
+		]);
+		await insertStableSeries(account.id, profile.id, 'Quarterly Tax', [
+			'2025-12-31',
+			'2026-03-31',
+			'2026-06-30'
+		]);
+		await insertStableSeries(account.id, profile.id, 'Yearly Domain', [
+			'2024-07-01',
+			'2025-07-01',
+			'2026-07-01'
+		]);
+
+		const suggestions = await generateRecurringSuggestions(db);
+
+		expect(suggestions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					payee: 'Weekly News',
+					cadence: 'weekly',
+					nextDate: '2026-06-22'
+				}),
+				expect.objectContaining({
+					payee: 'Biweekly Cleaning',
+					cadence: 'biweekly',
+					nextDate: '2026-07-14'
+				}),
+				expect.objectContaining({
+					payee: 'Quarterly Tax',
+					cadence: 'quarterly',
+					nextDate: '2026-09-30'
+				}),
+				expect.objectContaining({
+					payee: 'Yearly Domain',
+					cadence: 'yearly',
+					nextDate: '2027-07-01'
+				})
+			])
+		);
+		expect(suggestions).toHaveLength(4);
+	});
+
 	it('does not suggest recurring groups for fewer than three or unstable transactions', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
 		const profile = await createProfile(db, {
@@ -223,6 +280,24 @@ async function insertRecurringGroup(input: {
 		.run();
 
 	return id;
+}
+
+async function insertStableSeries(
+	accountId: string,
+	profileId: string,
+	payee: string,
+	bookingDates: string[]
+) {
+	for (const bookingDate of bookingDates) {
+		await insertTransaction({
+			accountId,
+			profileId,
+			categoryId: 'cat-utilities',
+			payee,
+			bookingDate,
+			amountCents: -2500
+		});
+	}
 }
 
 async function insertTransaction(input: {
