@@ -7,6 +7,7 @@ import {
 	createTestDbClient
 } from '../../../../tests/db/test-database';
 import { createAccount } from '../accounts/repository';
+import { createContract } from '../contracts/repository';
 import type { DbClient } from '../db-client';
 import { createPlannedIncome, createPlannedPayment } from '../planned-cashflow/repository';
 import {
@@ -32,11 +33,18 @@ describe('cashflow repository', () => {
 			getUpcomingPayments(db, { asOf: '2026-07-08', monthEnd: '2026-07-31' })
 		).resolves.toEqual([
 			expect.objectContaining({ payee: 'Power Co', amountCents: 9000, dueDate: '2026-07-10' }),
+			expect.objectContaining({ payee: 'Insurance Co', amountCents: 4500, dueDate: '2026-07-12' }),
+			expect.objectContaining({ payee: 'Gym', amountCents: 1999, dueDate: '2026-07-15' }),
 			expect.objectContaining({ payee: 'Rent', amountCents: 80000, dueDate: '2026-07-20' })
 		]);
 		await expect(
 			getUpcomingIncome(db, { asOf: '2026-07-08', monthEnd: '2026-07-31' })
 		).resolves.toEqual([
+			expect.objectContaining({
+				payer: 'Payroll GmbH',
+				amountCents: 275000,
+				dueDate: '2026-07-24'
+			}),
 			expect.objectContaining({ payer: 'Employer', amountCents: 250000, dueDate: '2026-07-25' })
 		]);
 	});
@@ -51,14 +59,16 @@ describe('cashflow repository', () => {
 
 		expect(projection).toMatchObject({
 			asOf: '2026-07-08',
-			projectionDate: '2026-07-24',
+			projectionDate: '2026-07-23',
 			currentBalanceCents: 150000,
-			upcomingPaymentCents: 89000,
-			projectedBalanceCents: 61000,
-			nextIncome: { payer: 'Employer', dueDate: '2026-07-25' }
+			upcomingPaymentCents: 95499,
+			projectedBalanceCents: 54501,
+			nextIncome: { payer: 'Payroll GmbH', dueDate: '2026-07-24' }
 		});
 		expect(projection.upcomingPayments.map((payment) => payment.payee)).toEqual([
 			'Power Co',
+			'Insurance Co',
+			'Gym',
 			'Rent'
 		]);
 	});
@@ -122,4 +132,62 @@ async function seedCashflow() {
 		amountCents: 250000,
 		dueDate: '2026-07-25'
 	});
+	await createContract(db, {
+		accountId: account.id,
+		categoryId: 'cat-utilities',
+		name: 'Insurance',
+		payee: 'Insurance Co',
+		kind: 'fixed_cost',
+		cadence: 'monthly',
+		expectedAmountCents: 4500,
+		nextDate: '2026-07-12'
+	});
+	await createContract(db, {
+		accountId: account.id,
+		categoryId: 'cat-salary',
+		name: 'Salary',
+		payee: 'Payroll GmbH',
+		kind: 'salary',
+		cadence: 'monthly',
+		expectedAmountCents: 275000,
+		nextDate: '2026-07-24'
+	});
+	await db
+		.prepare(
+			`INSERT INTO recurring_groups (
+				id, account_id, category_id, payee, cadence, expected_amount_cents,
+				next_date, status, confidence
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+		.bind(
+			'recurring-gym',
+			account.id,
+			'cat-health',
+			'Gym',
+			'monthly',
+			1999,
+			'2026-07-15',
+			'confirmed',
+			90
+		)
+		.run();
+	await db
+		.prepare(
+			`INSERT INTO recurring_groups (
+				id, account_id, category_id, payee, cadence, expected_amount_cents,
+				next_date, status, confidence
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+		.bind(
+			'recurring-suggestion',
+			account.id,
+			'cat-health',
+			'Suggested Gym',
+			'monthly',
+			1999,
+			'2026-07-16',
+			'suggested',
+			90
+		)
+		.run();
 }
