@@ -8,6 +8,8 @@ test('renders the scaffold dashboard shell', async ({ page }) => {
 		page.getByRole('heading', { name: /account setup|kontoeinrichtung/i })
 	).toBeVisible();
 	await expect(page.getByRole('heading', { name: /net worth|nettovermoegen/i })).toBeVisible();
+	await expect(page.getByLabel(/dashboard account|dashboard-konto/i)).toBeVisible();
+	await expect(page.getByRole('button', { name: /apply scope|ansicht anwenden/i })).toBeVisible();
 	await expect(
 		page.getByRole('heading', { name: /cashflow this month|cashflow diesen monat/i })
 	).toBeVisible();

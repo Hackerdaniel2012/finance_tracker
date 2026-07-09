@@ -49,6 +49,8 @@
 	"balance_before_salary": "Saldo vor Gehalt",
 	"projection_date": "Projektionsdatum",
 	"net_worth": "Nettovermoegen",
+	"dashboard_account_scope": "Dashboard-Konto",
+	"apply_scope": "Ansicht anwenden",
 	"no_chart_data": "Noch keine Nettovermoegensdaten",
 	"recent_transactions": "Letzte Transaktionen",
 	"no_recent_transactions": "Keine Transaktionen in diesem Zeitraum",

@@ -91,6 +91,7 @@
 	let profileAccountId = $state('');
 	let profileLabel = $state('');
 	let profileBankId = $state<BankId>('dkb');
+	let dashboardAccountId = $state('');
 	let isSaving = $state(false);
 
 	const netWorthPoints = $derived(
@@ -136,8 +137,13 @@
 		dashboardError = null;
 
 		try {
-			const summaryPayload = await fetchJson<{ summary: SummaryReport }>('/api/summary');
-			const netWorthPayload = await fetchJson<{ netWorth: NetWorthReport }>('/api/net-worth');
+			const reportQuery = buildDashboardReportQuery();
+			const summaryPayload = await fetchJson<{ summary: SummaryReport }>(
+				`/api/summary${reportQuery}`
+			);
+			const netWorthPayload = await fetchJson<{ netWorth: NetWorthReport }>(
+				`/api/net-worth${reportQuery}`
+			);
 			const paymentsPayload = await fetchJson<{ upcomingPayments: UpcomingPayment[] }>(
 				'/api/upcoming-payments'
 			);
@@ -158,6 +164,10 @@
 			dashboardStatus = m.dashboard_status_error();
 			dashboardError = m.dashboard_status_error();
 		}
+	}
+
+	async function applyDashboardAccountFilter() {
+		await loadDashboard();
 	}
 
 	async function createAccount(event: SubmitEvent) {
@@ -238,6 +248,10 @@
 		});
 	}
 
+	function buildDashboardReportQuery(): string {
+		return dashboardAccountId ? `?accountId=${encodeURIComponent(dashboardAccountId)}` : '';
+	}
+
 	function getAccountBalanceCents(account: AccountWithProfile): number {
 		return (
 			netWorth?.accounts.find((balance) => balance.accountId === account.id)?.balanceCents ??
@@ -316,11 +330,37 @@
 		</div>
 
 		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
-			<div class="flex items-center justify-between gap-4">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.net_worth()}</h2>
-				<p class="text-sm text-zinc-500">
-					{summary?.range.from ?? ''} - {summary?.range.to ?? ''}
-				</p>
+			<div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+				<div>
+					<h2 class="text-lg font-semibold text-zinc-950">{m.net_worth()}</h2>
+					<p class="mt-1 text-sm text-zinc-500">
+						{summary?.range.from ?? ''} - {summary?.range.to ?? ''}
+					</p>
+				</div>
+				<form
+					class="flex flex-col gap-2 sm:flex-row sm:items-end"
+					onsubmit={applyDashboardAccountFilter}
+				>
+					<label class="grid gap-1 text-sm font-medium text-zinc-700">
+						<span>{m.dashboard_account_scope()}</span>
+						<select
+							class="min-w-48 rounded border-zinc-300"
+							aria-label={m.dashboard_account_scope()}
+							bind:value={dashboardAccountId}
+						>
+							<option value="">{m.all_accounts()}</option>
+							{#each accounts as account (account.id)}
+								<option value={account.id}>{account.name}</option>
+							{/each}
+						</select>
+					</label>
+					<button
+						class="rounded border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-950"
+						type="submit"
+					>
+						{m.apply_scope()}
+					</button>
+				</form>
 			</div>
 			<div class="mt-5 h-64">
 				{#if netWorthPoints.length > 0}
