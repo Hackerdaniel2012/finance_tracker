@@ -27,7 +27,7 @@
 		description: string | null;
 		note: string | null;
 		classificationStatus: TransactionClassificationStatus;
-		tags: string[];
+		tags: Array<{ id: string; name: string; color: string | null }>;
 		reviewFlag: { id: string; reason: string; status: string } | null;
 	}
 
@@ -146,7 +146,7 @@
 	function setEditTransaction(transaction: Transaction) {
 		editCategoryId = transaction.categoryId ?? '';
 		editNote = transaction.note ?? '';
-		editTags = transaction.tags.join(', ');
+		editTags = transaction.tags.map((tag) => tag.name).join(', ');
 		createRule = false;
 		ruleName = '';
 	}
