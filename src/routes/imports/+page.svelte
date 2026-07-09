@@ -74,6 +74,7 @@
 	let error = $state<string | null>(null);
 	let isPreviewing = $state(false);
 	let isConfirming = $state(false);
+	let deletingImportId = $state<string | null>(null);
 
 	const canPreview = $derived(selectedProfileId !== '' && selectedFile !== null && !isPreviewing);
 	const canConfirm = $derived(
@@ -161,6 +162,24 @@
 			error = m.import_status_error();
 		} finally {
 			isConfirming = false;
+		}
+	}
+
+	async function deleteImport(batch: ImportBatch) {
+		deletingImportId = batch.id;
+		error = null;
+
+		try {
+			await fetchJson(`/api/imports/${batch.id}`, {
+				method: 'DELETE'
+			});
+			status = m.import_status_deleted();
+			await loadImportState();
+		} catch {
+			status = m.import_status_error();
+			error = m.import_status_error();
+		} finally {
+			deletingImportId = null;
 		}
 	}
 
@@ -350,7 +369,7 @@
 					<p class="py-4 text-sm text-zinc-500">{m.no_import_batches()}</p>
 				{:else}
 					{#each imports as batch (batch.id)}
-						<article class="grid gap-2 py-4 sm:grid-cols-[1fr_auto] sm:items-center">
+						<article class="grid gap-3 py-4 sm:grid-cols-[1fr_auto] sm:items-center">
 							<div>
 								<h3 class="font-semibold text-zinc-950">
 									{batch.accountName} / {batch.adapterId}
@@ -361,10 +380,20 @@
 									)}
 								</p>
 							</div>
-							<p class="text-sm text-zinc-700">
-								{m.imported_rows()}: {batch.importedCount} / {m.duplicate_rows()}:
-								{batch.duplicateCount}
-							</p>
+							<div class="grid gap-2 text-sm text-zinc-700 sm:justify-items-end">
+								<p>
+									{m.imported_rows()}: {batch.importedCount} / {m.duplicate_rows()}:
+									{batch.duplicateCount}
+								</p>
+								<button
+									class="rounded border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 disabled:opacity-50"
+									type="button"
+									disabled={deletingImportId === batch.id}
+									onclick={() => deleteImport(batch)}
+								>
+									{m.delete_import_batch()}
+								</button>
+							</div>
 						</article>
 					{/each}
 				{/if}
