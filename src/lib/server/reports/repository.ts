@@ -2,6 +2,7 @@ import { NotFoundError } from '../accounts/errors';
 import type { DbClient, DbRow } from '../db-client';
 import type {
 	AccountBalanceHistoryReport,
+	NetWorthReportOptions,
 	NetWorthReport,
 	ReportDateRange,
 	SummaryReport,
@@ -32,14 +33,16 @@ export async function getSummaryReport(
 
 export async function getNetWorthReport(
 	db: DbClient,
-	range: ReportDateRange
+	range: ReportDateRange,
+	options?: NetWorthReportOptions
 ): Promise<NetWorthReport> {
+	const accountId = options?.accountId;
 	const [accounts, liabilities, snapshotRows, balanceEventDates, assetInputs] = await Promise.all([
-		getCurrentAccountBalances(db, range.to),
-		getActiveLiabilities(db, range.to),
-		getSnapshotPoints(db, range),
-		getBalanceEventDates(db, range),
-		getAssetInputs(db, range.to)
+		getCurrentAccountBalances(db, range.to, accountId),
+		getActiveLiabilities(db, range.to, accountId),
+		getSnapshotPoints(db, range, accountId),
+		getBalanceEventDates(db, range, accountId),
+		getAssetInputs(db, range.to, accountId)
 	]);
 	const currentAssetsCents = accounts.reduce((sum, account) => sum + account.balanceCents, 0);
 	const currentLiabilitiesCents = liabilities.reduce(
@@ -327,8 +330,10 @@ async function getRecentTransactions(
 
 async function getCurrentAccountBalances(
 	db: DbClient,
-	asOfDate: string
+	asOfDate: string,
+	accountId?: string
 ): Promise<NetWorthReport['accounts']> {
+	const accountClause = accountId ? 'WHERE a.id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT
@@ -339,10 +344,11 @@ async function getCurrentAccountBalances(
 				COALESCE(SUM(CASE WHEN t.booking_date <= ? THEN t.amount_cents ELSE 0 END), 0) AS net_to_date_cents
 			FROM accounts a
 			LEFT JOIN transactions t ON t.account_id = a.id
+			${accountClause}
 			GROUP BY a.id, a.name, a.opening_balance_cents, a.current_balance_cents
 			ORDER BY a.display_order ASC, a.created_at ASC`
 		)
-		.bind(asOfDate)
+		.bind(asOfDate, ...(accountId ? [accountId] : []))
 		.all<AccountBalanceRow>();
 
 	return results.map((row) => ({
@@ -352,17 +358,22 @@ async function getCurrentAccountBalances(
 	}));
 }
 
-async function getAssetInputs(db: DbClient, currentDate: string): Promise<AssetInputs> {
+async function getAssetInputs(
+	db: DbClient,
+	currentDate: string,
+	accountId?: string
+): Promise<AssetInputs> {
 	const [accounts, transactions, snapshots] = await Promise.all([
-		getAssetAccounts(db),
-		getAssetTransactions(db, currentDate),
-		getAssetSnapshots(db, currentDate)
+		getAssetAccounts(db, accountId),
+		getAssetTransactions(db, currentDate, accountId),
+		getAssetSnapshots(db, currentDate, accountId)
 	]);
 
 	return { accounts, transactions, snapshots };
 }
 
-async function getAssetAccounts(db: DbClient): Promise<AssetAccountRow[]> {
+async function getAssetAccounts(db: DbClient, accountId?: string): Promise<AssetAccountRow[]> {
+	const accountClause = accountId ? 'WHERE a.id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT
@@ -370,8 +381,10 @@ async function getAssetAccounts(db: DbClient): Promise<AssetAccountRow[]> {
 				a.name,
 				a.opening_balance_cents,
 				a.current_balance_cents
-			FROM accounts a`
+			FROM accounts a
+			${accountClause}`
 		)
+		.bind(...(accountId ? [accountId] : []))
 		.all<AssetAccountRow>();
 
 	return results;
@@ -379,30 +392,37 @@ async function getAssetAccounts(db: DbClient): Promise<AssetAccountRow[]> {
 
 async function getAssetTransactions(
 	db: DbClient,
-	currentDate: string
+	currentDate: string,
+	accountId?: string
 ): Promise<AssetTransactionRow[]> {
+	const accountClause = accountId ? 'AND account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT account_id, booking_date, amount_cents, balance_after_cents, created_at, id
 			FROM transactions
-			WHERE booking_date <= ?
+			WHERE booking_date <= ? ${accountClause}
 			ORDER BY account_id ASC, booking_date ASC, created_at ASC, id ASC`
 		)
-		.bind(currentDate)
+		.bind(currentDate, ...(accountId ? [accountId] : []))
 		.all<AssetTransactionRow>();
 
 	return results;
 }
 
-async function getAssetSnapshots(db: DbClient, currentDate: string): Promise<AssetSnapshotRow[]> {
+async function getAssetSnapshots(
+	db: DbClient,
+	currentDate: string,
+	accountId?: string
+): Promise<AssetSnapshotRow[]> {
+	const accountClause = accountId ? 'AND account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT account_id, snapshot_date, balance_cents, created_at, id
 			FROM account_balance_snapshots
-			WHERE snapshot_date <= ?
+			WHERE snapshot_date <= ? ${accountClause}
 			ORDER BY account_id ASC, snapshot_date ASC, created_at ASC, id ASC`
 		)
-		.bind(currentDate)
+		.bind(currentDate, ...(accountId ? [accountId] : []))
 		.all<AssetSnapshotRow>();
 
 	return results;
@@ -454,17 +474,20 @@ function getAccountBalanceAsOf(
 
 async function getActiveLiabilities(
 	db: DbClient,
-	asOfDate: string
+	asOfDate: string,
+	accountId?: string
 ): Promise<NetWorthReport['liabilities']> {
+	const accountClause = accountId ? 'AND account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT id, name, amount_cents, as_of_date
 			FROM marked_liabilities
 			WHERE status = 'active'
 				AND as_of_date <= ?
+				${accountClause}
 			ORDER BY as_of_date DESC, name ASC`
 		)
-		.bind(asOfDate)
+		.bind(asOfDate, ...(accountId ? [accountId] : []))
 		.all<LiabilityRow>();
 
 	return results.map((row) => ({
@@ -477,38 +500,54 @@ async function getActiveLiabilities(
 
 async function getSnapshotPoints(
 	db: DbClient,
-	range: ReportDateRange
+	range: ReportDateRange,
+	accountId?: string
 ): Promise<SnapshotPointRow[]> {
+	const accountClause = accountId ? 'AND account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT snapshot_date, SUM(balance_cents) AS assets_cents
 			FROM account_balance_snapshots
-			WHERE snapshot_date BETWEEN ? AND ?
+			WHERE snapshot_date BETWEEN ? AND ? ${accountClause}
 			GROUP BY snapshot_date
 			ORDER BY snapshot_date ASC`
 		)
-		.bind(range.from, range.to)
+		.bind(range.from, range.to, ...(accountId ? [accountId] : []))
 		.all<SnapshotPointRow>();
 
 	return results;
 }
 
-async function getBalanceEventDates(db: DbClient, range: ReportDateRange): Promise<string[]> {
+async function getBalanceEventDates(
+	db: DbClient,
+	range: ReportDateRange,
+	accountId?: string
+): Promise<string[]> {
+	const transactionAccountClause = accountId ? 'AND account_id = ?' : '';
+	const liabilityAccountClause = accountId ? 'AND account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT booking_date AS date
 			FROM transactions
-			WHERE booking_date BETWEEN ? AND ?
+			WHERE booking_date BETWEEN ? AND ? ${transactionAccountClause}
 			GROUP BY booking_date
 			UNION
 			SELECT as_of_date AS date
 			FROM marked_liabilities
 			WHERE status = 'active'
 				AND as_of_date BETWEEN ? AND ?
+				${liabilityAccountClause}
 			GROUP BY as_of_date
 			ORDER BY date ASC`
 		)
-		.bind(range.from, range.to, range.from, range.to)
+		.bind(
+			range.from,
+			range.to,
+			...(accountId ? [accountId] : []),
+			range.from,
+			range.to,
+			...(accountId ? [accountId] : [])
+		)
 		.all<DateRow>();
 
 	return results.map((row) => row.date);

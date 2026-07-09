@@ -7,6 +7,10 @@ export interface SummaryReportOptions {
 	accountId?: string;
 }
 
+export interface NetWorthReportOptions {
+	accountId?: string;
+}
+
 export interface AccountBalanceHistoryReport {
 	accountId: string;
 	accountName: string;

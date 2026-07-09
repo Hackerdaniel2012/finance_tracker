@@ -1,5 +1,5 @@
 import { ValidationError } from '../accounts/errors';
-import type { ReportDateRange } from './types';
+import type { NetWorthReportOptions, ReportDateRange } from './types';
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -15,6 +15,12 @@ export function parseReportDateRange(url: URL, today = new Date()): ReportDateRa
 	return { from, to };
 }
 
+export function parseNetWorthReportOptions(url: URL): NetWorthReportOptions {
+	return {
+		accountId: optionalQueryString(url, 'accountId')
+	};
+}
+
 function optionalDate(value: string | null, field: string): string | undefined {
 	if (value === null || value === '') {
 		return undefined;
@@ -25,6 +31,11 @@ function optionalDate(value: string | null, field: string): string | undefined {
 	}
 
 	return value;
+}
+
+function optionalQueryString(url: URL, field: string): string | undefined {
+	const value = url.searchParams.get(field)?.trim();
+	return value || undefined;
 }
 
 function startOfMonth(date: Date): string {

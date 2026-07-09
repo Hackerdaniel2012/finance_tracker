@@ -193,6 +193,101 @@ describe('reports repository', () => {
 		]);
 	});
 
+	it('filters net worth to a single account', async () => {
+		const accountA = await createAccount(db, { name: 'Checking', openingBalanceCents: 100000 });
+		const profileA = await createProfile(db, {
+			accountId: accountA.id,
+			bankId: 'n26',
+			label: 'N26 Main'
+		});
+		const accountB = await createAccount(db, { name: 'Savings', openingBalanceCents: 500000 });
+		const profileB = await createProfile(db, {
+			accountId: accountB.id,
+			bankId: 'dkb',
+			label: 'DKB CSV'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, currency,
+					search_text, classification_status
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			)
+			.bind(
+				'tx-a',
+				profileA.id,
+				accountA.id,
+				'key-a',
+				'2026-07-05',
+				-10000,
+				'EUR',
+				'checking',
+				'unknown',
+				'tx-b',
+				profileB.id,
+				accountB.id,
+				'key-b',
+				'2026-07-06',
+				-20000,
+				'EUR',
+				'savings',
+				'unknown'
+			)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO marked_liabilities (id, account_id, name, amount_cents, as_of_date)
+				VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`
+			)
+			.bind(
+				'liability-a',
+				accountA.id,
+				'Checking card',
+				30000,
+				'2026-07-10',
+				'liability-b',
+				accountB.id,
+				'Savings margin',
+				40000,
+				'2026-07-11'
+			)
+			.run();
+
+		const netWorth = await getNetWorthReport(
+			db,
+			{ from: '2026-07-01', to: '2026-07-31' },
+			{ accountId: accountA.id }
+		);
+
+		expect(netWorth.accounts).toEqual([
+			{ accountId: accountA.id, accountName: 'Checking', balanceCents: 90000 }
+		]);
+		expect(netWorth.liabilities).toEqual([
+			{
+				id: 'liability-a',
+				name: 'Checking card',
+				amountCents: 30000,
+				asOfDate: '2026-07-10'
+			}
+		]);
+		expect(netWorth.points).toEqual([
+			{ date: '2026-07-01', assetsCents: 100000, liabilitiesCents: 0, netWorthCents: 100000 },
+			{ date: '2026-07-05', assetsCents: 90000, liabilitiesCents: 0, netWorthCents: 90000 },
+			{
+				date: '2026-07-10',
+				assetsCents: 90000,
+				liabilitiesCents: 30000,
+				netWorthCents: 60000
+			},
+			{
+				date: '2026-07-31',
+				assetsCents: 90000,
+				liabilitiesCents: 30000,
+				netWorthCents: 60000
+			}
+		]);
+	});
+
 	it('filters the summary report to a single account', async () => {
 		const accountA = await seedReportData();
 		const accountB = await createAccount(db, {

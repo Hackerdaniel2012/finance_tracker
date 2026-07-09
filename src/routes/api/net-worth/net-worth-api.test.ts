@@ -59,6 +59,60 @@ describe('/api/net-worth', () => {
 			}
 		});
 	});
+
+	it('filters net worth by account id', async () => {
+		const checking = await createAccount(db, {
+			name: 'Checking',
+			openingBalanceCents: 100000
+		});
+		const savings = await createAccount(db, {
+			name: 'Savings',
+			openingBalanceCents: 200000
+		});
+		await db
+			.prepare(
+				`INSERT INTO marked_liabilities (id, account_id, name, amount_cents, as_of_date)
+				VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`
+			)
+			.bind(
+				'liability-checking',
+				checking.id,
+				'Card',
+				25000,
+				'2026-07-01',
+				'liability-savings',
+				savings.id,
+				'Loan',
+				50000,
+				'2026-07-01'
+			)
+			.run();
+
+		const response = await GET(
+			event(`http://localhost/api/net-worth?from=2026-07-01&to=2026-07-31&accountId=${checking.id}`)
+		);
+
+		await expect(response.json()).resolves.toMatchObject({
+			netWorth: {
+				accounts: [{ accountId: checking.id, accountName: 'Checking', balanceCents: 100000 }],
+				liabilities: [{ id: 'liability-checking', name: 'Card', amountCents: 25000 }],
+				points: [
+					{
+						date: '2026-07-01',
+						assetsCents: 100000,
+						liabilitiesCents: 25000,
+						netWorthCents: 75000
+					},
+					{
+						date: '2026-07-31',
+						assetsCents: 100000,
+						liabilitiesCents: 25000,
+						netWorthCents: 75000
+					}
+				]
+			}
+		});
+	});
 });
 
 function event(url: string) {
