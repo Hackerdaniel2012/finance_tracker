@@ -8,6 +8,7 @@
 	type PlannedPaymentStatus = 'planned' | 'paid' | 'cancelled';
 	type PlannedIncomeStatus = 'planned' | 'received' | 'cancelled';
 	type RecurringStatus = 'suggested' | 'confirmed' | 'ignored';
+	type LiabilityStatus = 'active' | 'cleared';
 
 	interface Account {
 		id: string;
@@ -75,6 +76,17 @@
 		note: string | null;
 	}
 
+	interface Liability {
+		id: string;
+		accountId: string | null;
+		accountName: string | null;
+		name: string;
+		amountCents: number;
+		asOfDate: string;
+		status: LiabilityStatus;
+		note: string | null;
+	}
+
 	interface RecurringGroup {
 		id: string;
 		accountName: string | null;
@@ -123,6 +135,7 @@
 	const contractStatuses: ContractStatus[] = ['active', 'paused', 'ended'];
 	const paymentStatuses: PlannedPaymentStatus[] = ['planned', 'paid', 'cancelled'];
 	const incomeStatuses: PlannedIncomeStatus[] = ['planned', 'received', 'cancelled'];
+	const liabilityStatuses: LiabilityStatus[] = ['active', 'cleared'];
 
 	let accounts = $state<Account[]>([]);
 	let profiles = $state<Profile[]>([]);
@@ -130,6 +143,7 @@
 	let contracts = $state<Contract[]>([]);
 	let plannedPayments = $state<PlannedPayment[]>([]);
 	let plannedIncome = $state<PlannedIncome[]>([]);
+	let liabilities = $state<Liability[]>([]);
 	let recurringGroups = $state<RecurringGroup[]>([]);
 	let upcomingPayments = $state<UpcomingPayment[]>([]);
 	let upcomingIncome = $state<UpcomingIncome[]>([]);
@@ -139,6 +153,7 @@
 	let isSavingContract = $state(false);
 	let isSavingPayment = $state(false);
 	let isSavingIncome = $state(false);
+	let isSavingLiability = $state(false);
 	let isUpdatingRecurring = $state(false);
 
 	let contractName = $state('');
@@ -169,11 +184,23 @@
 	let incomeCategoryId = $state('');
 	let incomeNote = $state('');
 
+	let liabilityName = $state('');
+	let liabilityAmount = $state('');
+	let liabilityAsOfDate = $state(todayIso());
+	let liabilityStatus = $state<LiabilityStatus>('active');
+	let liabilityAccountId = $state('');
+	let liabilityNote = $state('');
+
 	const upcomingPaymentTotal = $derived(
 		upcomingPayments.reduce((sum, payment) => sum + payment.amountCents, 0)
 	);
 	const upcomingIncomeTotal = $derived(
 		upcomingIncome.reduce((sum, income) => sum + income.amountCents, 0)
+	);
+	const activeLiabilityTotal = $derived(
+		liabilities
+			.filter((liability) => liability.status === 'active')
+			.reduce((sum, liability) => sum + liability.amountCents, 0)
 	);
 
 	onMount(() => {
@@ -192,6 +219,7 @@
 				contractPayload,
 				paymentPayload,
 				incomePayload,
+				liabilityPayload,
 				recurringPayload,
 				upcomingPaymentPayload,
 				upcomingIncomePayload,
@@ -203,6 +231,7 @@
 				fetchJson<{ contracts: Contract[] }>('/api/contracts'),
 				fetchJson<{ plannedPayments: PlannedPayment[] }>('/api/planned-payments'),
 				fetchJson<{ plannedIncome: PlannedIncome[] }>('/api/planned-income'),
+				fetchJson<{ liabilities: Liability[] }>('/api/liabilities'),
 				fetchJson<{ recurringGroups: RecurringGroup[] }>('/api/recurring'),
 				fetchJson<{ upcomingPayments: UpcomingPayment[] }>('/api/upcoming-payments'),
 				fetchJson<{ upcomingIncome: UpcomingIncome[] }>('/api/upcoming-income'),
@@ -215,6 +244,7 @@
 			contracts = contractPayload.contracts;
 			plannedPayments = paymentPayload.plannedPayments;
 			plannedIncome = incomePayload.plannedIncome;
+			liabilities = liabilityPayload.liabilities;
 			recurringGroups = recurringPayload.recurringGroups;
 			upcomingPayments = upcomingPaymentPayload.upcomingPayments;
 			upcomingIncome = upcomingIncomePayload.upcomingIncome;
@@ -343,6 +373,58 @@
 		await patchAndReload('/api/planned-income', { id: income.id, status: nextStatus });
 	}
 
+	async function createLiability(event: SubmitEvent) {
+		event.preventDefault();
+		isSavingLiability = true;
+		error = null;
+
+		try {
+			await fetchJson<{ liability: Liability }>('/api/liabilities', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					accountId: liabilityAccountId || null,
+					name: liabilityName,
+					amountCents: eurosToCents(liabilityAmount),
+					asOfDate: liabilityAsOfDate,
+					status: liabilityStatus,
+					note: liabilityNote || null
+				})
+			});
+
+			liabilityName = '';
+			liabilityAmount = '';
+			liabilityNote = '';
+			status = m.planning_status_saved();
+			await loadPlanningState();
+		} catch {
+			status = m.planning_status_error();
+			error = m.planning_status_error();
+		} finally {
+			isSavingLiability = false;
+		}
+	}
+
+	async function updateLiabilityStatus(liability: Liability, nextStatus: LiabilityStatus) {
+		await patchAndReload('/api/liabilities', { id: liability.id, status: nextStatus });
+	}
+
+	async function deleteLiability(liability: Liability) {
+		error = null;
+		try {
+			await fetchJson('/api/liabilities', {
+				method: 'DELETE',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ id: liability.id })
+			});
+			status = m.planning_status_saved();
+			await loadPlanningState();
+		} catch {
+			status = m.planning_status_error();
+			error = m.planning_status_error();
+		}
+	}
+
 	async function updateRecurringStatus(group: RecurringGroup, nextStatus: RecurringStatus) {
 		isUpdatingRecurring = true;
 		try {
@@ -449,6 +531,13 @@
 			cancelled: m.status_cancelled()
 		}[value];
 	}
+
+	function liabilityStatusLabel(value: LiabilityStatus): string {
+		return {
+			active: m.status_active(),
+			cleared: m.status_cleared()
+		}[value];
+	}
 </script>
 
 <svelte:head>
@@ -485,6 +574,12 @@
 			</p>
 			<p class="mt-1 text-xs text-zinc-500">
 				{projection ? formatDate(projection.projectionDate) : m.not_available()}
+			</p>
+		</div>
+		<div class="rounded border border-zinc-200 bg-white p-5 shadow-sm md:col-span-3">
+			<p class="text-sm text-zinc-500">{m.active_liabilities()}</p>
+			<p class="mt-2 text-2xl font-semibold text-red-700">
+				{centsToEuros(activeLiabilityTotal)}
 			</p>
 		</div>
 	</section>
@@ -836,6 +931,114 @@
 				</button>
 			</form>
 		</section>
+	</section>
+
+	<section class="grid gap-6 xl:grid-cols-3">
+		<section class="rounded border border-zinc-200 bg-white shadow-sm xl:col-span-2">
+			<div class="border-b border-zinc-200 p-5">
+				<h2 class="text-lg font-semibold text-zinc-950">{m.liabilities_title()}</h2>
+			</div>
+			<div class="divide-y divide-zinc-100">
+				{#each liabilities as liability (liability.id)}
+					<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
+						<div>
+							<p class="font-medium text-zinc-950">{liability.name}</p>
+							<p class="mt-1 text-sm text-zinc-500">
+								{formatDate(liability.asOfDate)} / {liabilityStatusLabel(liability.status)}
+							</p>
+							<p class="mt-1 text-xs text-zinc-500">
+								{liability.accountName ?? m.not_available()}
+								{#if liability.note}
+									/ {liability.note}
+								{/if}
+							</p>
+						</div>
+						<div class="text-left lg:text-right">
+							<p class="font-semibold text-red-700">{centsToEuros(liability.amountCents)}</p>
+							<div class="mt-2 flex flex-wrap gap-2 lg:justify-end">
+								{#each liabilityStatuses as option (option)}
+									<button
+										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
+										type="button"
+										disabled={liability.status === option}
+										onclick={() => updateLiabilityStatus(liability, option)}
+									>
+										{liabilityStatusLabel(option)}
+									</button>
+								{/each}
+								<button
+									class="rounded border border-red-200 px-2 py-1 text-xs font-medium text-red-700"
+									type="button"
+									onclick={() => deleteLiability(liability)}
+								>
+									{m.delete_liability()}
+								</button>
+							</div>
+						</div>
+					</div>
+				{:else}
+					<p class="p-5 text-sm text-zinc-600">{m.no_liabilities()}</p>
+				{/each}
+			</div>
+		</section>
+
+		<form class="rounded border border-zinc-200 bg-white p-5 shadow-sm" onsubmit={createLiability}>
+			<h2 class="text-lg font-semibold text-zinc-950">{m.new_liability()}</h2>
+			<div class="mt-5 grid gap-4">
+				<label class="grid gap-1 text-sm font-medium text-zinc-700">
+					<span>{m.liability_name()}</span>
+					<input class="w-full rounded border-zinc-300" bind:value={liabilityName} required />
+				</label>
+				<div class="grid grid-cols-2 gap-3">
+					<label class="grid gap-1 text-sm font-medium text-zinc-700">
+						<span>{m.amount()}</span>
+						<input
+							class="w-full rounded border-zinc-300"
+							bind:value={liabilityAmount}
+							inputmode="decimal"
+							required
+						/>
+					</label>
+					<label class="grid gap-1 text-sm font-medium text-zinc-700">
+						<span>{m.as_of_date()}</span>
+						<input
+							class="w-full rounded border-zinc-300"
+							type="date"
+							bind:value={liabilityAsOfDate}
+							required
+						/>
+					</label>
+				</div>
+				<label class="grid gap-1 text-sm font-medium text-zinc-700">
+					<span>{m.account()}</span>
+					<select class="w-full rounded border-zinc-300" bind:value={liabilityAccountId}>
+						<option value="">{m.not_available()}</option>
+						{#each accounts as account (account.id)}
+							<option value={account.id}>{account.name}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="grid gap-1 text-sm font-medium text-zinc-700">
+					<span>{m.notes()}</span>
+					<input class="w-full rounded border-zinc-300" bind:value={liabilityNote} />
+				</label>
+				<label class="grid gap-1 text-sm font-medium text-zinc-700">
+					<span>{m.status()}</span>
+					<select class="w-full rounded border-zinc-300" bind:value={liabilityStatus}>
+						{#each liabilityStatuses as option (option)}
+							<option value={option}>{liabilityStatusLabel(option)}</option>
+						{/each}
+					</select>
+				</label>
+				<button
+					class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+					type="submit"
+					disabled={isSavingLiability}
+				>
+					{m.create_liability()}
+				</button>
+			</div>
+		</form>
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-3">

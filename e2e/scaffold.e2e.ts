@@ -54,4 +54,7 @@ test('renders the planning shell', async ({ page }) => {
 	await expect(
 		page.getByRole('heading', { name: /^planned income$|^geplante einnahmen$/i })
 	).toBeVisible();
+	await expect(
+		page.getByRole('heading', { name: /^liabilities$|^verbindlichkeiten$/i })
+	).toBeVisible();
 });

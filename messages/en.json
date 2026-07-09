@@ -176,6 +176,14 @@
 	"new_planned_income": "New planned income",
 	"create_planned_income": "Create planned income",
 	"no_planned_income": "No planned income yet",
+	"liabilities_title": "Liabilities",
+	"new_liability": "New liability",
+	"liability_name": "Liability name",
+	"create_liability": "Create liability",
+	"delete_liability": "Delete",
+	"no_liabilities": "No liabilities yet",
+	"active_liabilities": "Active liabilities",
+	"as_of_date": "As of date",
 	"due_date": "Due date",
 	"payer": "Payer",
 	"recurring_title": "Recurring suggestions",
@@ -200,5 +208,6 @@
 	"status_planned": "Planned",
 	"status_paid": "Paid",
 	"status_cancelled": "Cancelled",
-	"status_received": "Received"
+	"status_received": "Received",
+	"status_cleared": "Cleared"
 }

@@ -176,6 +176,14 @@
 	"new_planned_income": "Neue geplante Einnahme",
 	"create_planned_income": "Geplante Einnahme erstellen",
 	"no_planned_income": "Noch keine geplanten Einnahmen",
+	"liabilities_title": "Verbindlichkeiten",
+	"new_liability": "Neue Verbindlichkeit",
+	"liability_name": "Name der Verbindlichkeit",
+	"create_liability": "Verbindlichkeit erstellen",
+	"delete_liability": "Loeschen",
+	"no_liabilities": "Noch keine Verbindlichkeiten",
+	"active_liabilities": "Aktive Verbindlichkeiten",
+	"as_of_date": "Standdatum",
 	"due_date": "Faelligkeit",
 	"payer": "Zahler",
 	"recurring_title": "Wiederholungsvorschlaege",
@@ -200,5 +208,6 @@
 	"status_planned": "Geplant",
 	"status_paid": "Bezahlt",
 	"status_cancelled": "Storniert",
-	"status_received": "Erhalten"
+	"status_received": "Erhalten",
+	"status_cleared": "Beglichen"
 }
