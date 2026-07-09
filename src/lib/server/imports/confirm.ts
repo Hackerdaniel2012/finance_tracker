@@ -4,6 +4,7 @@ import { getProfile } from '../accounts/repository';
 import { listCategoryRules } from '../categories/repository';
 import type { CategoryRule } from '../categories/types';
 import type { DbClient, DbRow } from '../db-client';
+import { generateRecurringSuggestions } from '../recurring/repository';
 import { getDateRange, sha256Hex } from './shared';
 import type { ConfirmImportInput, ImportReport } from './types';
 
@@ -86,6 +87,8 @@ export async function confirmImport(
 	for (const error of parsed.errors) {
 		await insertRowError(db, batchId, profile.id, error);
 	}
+
+	await generateRecurringSuggestions(db);
 
 	return {
 		batchId,

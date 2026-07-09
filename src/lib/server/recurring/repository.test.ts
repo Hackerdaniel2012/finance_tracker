@@ -8,7 +8,11 @@ import {
 } from '../../../../tests/db/test-database';
 import { createAccount, createProfile } from '../accounts/repository';
 import type { DbClient } from '../db-client';
-import { listRecurringGroups, updateRecurringGroup } from './repository';
+import {
+	generateRecurringSuggestions,
+	listRecurringGroups,
+	updateRecurringGroup
+} from './repository';
 
 let db: DbClient;
 let sqlite: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -87,6 +91,106 @@ describe('recurring repository', () => {
 			'Recurring group not found'
 		);
 	});
+
+	it('suggests monthly recurring groups after three stable similar transactions', async () => {
+		const account = await createAccount(db, { name: 'Main Giro' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'N26 Main'
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Power Co',
+			bookingDate: '2026-04-15',
+			amountCents: -4599
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Power Co',
+			bookingDate: '2026-05-15',
+			amountCents: -4600
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Power Co',
+			bookingDate: '2026-06-14',
+			amountCents: -4625
+		});
+
+		await expect(generateRecurringSuggestions(db)).resolves.toEqual([
+			expect.objectContaining({
+				accountId: account.id,
+				profileId: profile.id,
+				categoryId: 'cat-utilities',
+				payee: 'Power Co',
+				cadence: 'monthly',
+				expectedAmountCents: 4608,
+				nextDate: '2026-07-14',
+				status: 'suggested',
+				source: 'imported',
+				transactionCount: 3
+			})
+		]);
+		await expect(generateRecurringSuggestions(db)).resolves.toEqual([]);
+	});
+
+	it('does not suggest recurring groups for fewer than three or unstable transactions', async () => {
+		const account = await createAccount(db, { name: 'Main Giro' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'N26 Main'
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Two Count',
+			bookingDate: '2026-05-01',
+			amountCents: -2000
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Two Count',
+			bookingDate: '2026-06-01',
+			amountCents: -2000
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Irregular Co',
+			bookingDate: '2026-04-01',
+			amountCents: -3000
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Irregular Co',
+			bookingDate: '2026-05-01',
+			amountCents: -3000
+		});
+		await insertTransaction({
+			accountId: account.id,
+			profileId: profile.id,
+			categoryId: 'cat-utilities',
+			payee: 'Irregular Co',
+			bookingDate: '2026-05-12',
+			amountCents: -3000
+		});
+
+		await expect(generateRecurringSuggestions(db)).resolves.toEqual([]);
+	});
 });
 
 async function insertRecurringGroup(input: {
@@ -119,4 +223,33 @@ async function insertRecurringGroup(input: {
 		.run();
 
 	return id;
+}
+
+async function insertTransaction(input: {
+	accountId: string;
+	profileId: string;
+	categoryId: string;
+	payee: string;
+	bookingDate: string;
+	amountCents: number;
+}) {
+	await db
+		.prepare(
+			`INSERT INTO transactions (
+				id, profile_id, account_id, category_id, dedupe_key, booking_date,
+				amount_cents, payee, search_text
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+		.bind(
+			crypto.randomUUID(),
+			input.profileId,
+			input.accountId,
+			input.categoryId,
+			`${input.payee}-${input.bookingDate}`,
+			input.bookingDate,
+			input.amountCents,
+			input.payee,
+			input.payee
+		)
+		.run();
 }
