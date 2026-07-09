@@ -32,8 +32,9 @@
 				<a class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" href={resolve('/review')}
 					>{m.nav_review()}</a
 				>
-				<a class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" href={resolve('/')}
-					>{m.nav_planning()}</a
+				<a
+					class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950"
+					href={resolve('/planning')}>{m.nav_planning()}</a
 				>
 			</nav>
 		</div>

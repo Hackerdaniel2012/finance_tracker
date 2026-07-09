@@ -42,3 +42,16 @@ test('renders the category review shell', async ({ page }) => {
 		page.getByRole('heading', { name: /category rules|kategorieregeln/i })
 	).toBeVisible();
 });
+
+test('renders the planning shell', async ({ page }) => {
+	await page.goto('/planning');
+
+	await expect(page.getByRole('heading', { name: /^planning$|^planung$/i })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /contracts|vertraege/i })).toBeVisible();
+	await expect(
+		page.getByRole('heading', { name: /^planned payments$|^geplante zahlungen$/i })
+	).toBeVisible();
+	await expect(
+		page.getByRole('heading', { name: /^planned income$|^geplante einnahmen$/i })
+	).toBeVisible();
+});
