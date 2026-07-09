@@ -92,7 +92,6 @@
 	let profileBankId = $state<BankId>('dkb');
 	let isSaving = $state(false);
 
-	const currentMonthRange = $derived(getCurrentMonthRange());
 	const netWorthPoints = $derived(
 		netWorth?.points.map((point) => ({
 			date: point.date,
@@ -135,11 +134,8 @@
 		dashboardError = null;
 
 		try {
-			const params = `from=${currentMonthRange.from}&to=${currentMonthRange.to}`;
-			const summaryPayload = await fetchJson<{ summary: SummaryReport }>(`/api/summary?${params}`);
-			const netWorthPayload = await fetchJson<{ netWorth: NetWorthReport }>(
-				`/api/net-worth?${params}`
-			);
+			const summaryPayload = await fetchJson<{ summary: SummaryReport }>('/api/summary');
+			const netWorthPayload = await fetchJson<{ netWorth: NetWorthReport }>('/api/net-worth');
 			const paymentsPayload = await fetchJson<{ upcomingPayments: UpcomingPayment[] }>(
 				'/api/upcoming-payments'
 			);
@@ -225,25 +221,6 @@
 		}
 
 		return (await response.json()) as T;
-	}
-
-	function getCurrentMonthRange(today = new Date()) {
-		const year = today.getFullYear();
-		const month = today.getMonth();
-		const from = new Date(year, month, 1);
-		const to = new Date(year, month + 1, 0);
-
-		return {
-			from: toIsoDate(from),
-			to: toIsoDate(to)
-		};
-	}
-
-	function toIsoDate(date: Date): string {
-		const year = date.getFullYear();
-		const month = String(date.getMonth() + 1).padStart(2, '0');
-		const day = String(date.getDate()).padStart(2, '0');
-		return `${year}-${month}-${day}`;
 	}
 
 	function eurosToCents(value: string): number {
@@ -332,7 +309,7 @@
 			<div class="flex items-center justify-between gap-4">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.net_worth()}</h2>
 				<p class="text-sm text-zinc-500">
-					{currentMonthRange.from} - {currentMonthRange.to}
+					{summary?.range.from ?? ''} - {summary?.range.to ?? ''}
 				</p>
 			</div>
 			<div class="mt-5 h-64">

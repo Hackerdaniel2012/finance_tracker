@@ -44,6 +44,12 @@ describe('/api/net-worth', () => {
 				liabilities: [{ id: 'liability-1', name: 'Card', amountCents: 25000 }],
 				points: [
 					{
+						date: '2026-07-01',
+						assetsCents: 125000,
+						liabilitiesCents: 25000,
+						netWorthCents: 100000
+					},
+					{
 						date: '2026-07-31',
 						assetsCents: 125000,
 						liabilitiesCents: 25000,

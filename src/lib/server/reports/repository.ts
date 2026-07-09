@@ -25,22 +25,38 @@ export async function getNetWorthReport(
 	db: DbClient,
 	range: ReportDateRange
 ): Promise<NetWorthReport> {
-	const [accounts, liabilities, snapshotRows] = await Promise.all([
+	const [accounts, liabilities, snapshotRows, balanceEventDates, assetInputs] = await Promise.all([
 		getCurrentAccountBalances(db, range.to),
 		getActiveLiabilities(db, range.to),
-		getSnapshotPoints(db, range)
+		getSnapshotPoints(db, range),
+		getBalanceEventDates(db, range),
+		getAssetInputs(db, range.to)
 	]);
 	const currentAssetsCents = accounts.reduce((sum, account) => sum + account.balanceCents, 0);
 	const currentLiabilitiesCents = liabilities.reduce(
 		(sum, liability) => sum + liability.amountCents,
 		0
 	);
-	const points = snapshotRows.map((row) => ({
-		date: row.snapshot_date,
-		assetsCents: row.assets_cents,
-		liabilitiesCents: liabilityTotalAsOf(liabilities, row.snapshot_date),
-		netWorthCents: row.assets_cents - liabilityTotalAsOf(liabilities, row.snapshot_date)
-	}));
+	const dates = [
+		...new Set([
+			range.from,
+			...snapshotRows.map((row) => row.snapshot_date),
+			...balanceEventDates,
+			range.to
+		])
+	].sort();
+	const points = [];
+	for (const date of dates) {
+		const assetsCents = getAssetsCentsAsOf(assetInputs, date, range.to);
+		const liabilitiesCents = liabilityTotalAsOf(liabilities, date);
+
+		points.push({
+			date,
+			assetsCents,
+			liabilitiesCents,
+			netWorthCents: assetsCents - liabilitiesCents
+		});
+	}
 
 	if (!points.some((point) => point.date === range.to)) {
 		points.push({
@@ -210,6 +226,105 @@ async function getCurrentAccountBalances(
 	}));
 }
 
+async function getAssetInputs(db: DbClient, currentDate: string): Promise<AssetInputs> {
+	const [accounts, transactions, snapshots] = await Promise.all([
+		getAssetAccounts(db),
+		getAssetTransactions(db, currentDate),
+		getAssetSnapshots(db, currentDate)
+	]);
+
+	return { accounts, transactions, snapshots };
+}
+
+async function getAssetAccounts(db: DbClient): Promise<AssetAccountRow[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT
+				a.id AS account_id,
+				a.opening_balance_cents,
+				a.current_balance_cents
+			FROM accounts a`
+		)
+		.all<AssetAccountRow>();
+
+	return results;
+}
+
+async function getAssetTransactions(
+	db: DbClient,
+	currentDate: string
+): Promise<AssetTransactionRow[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT account_id, booking_date, amount_cents, balance_after_cents, created_at, id
+			FROM transactions
+			WHERE booking_date <= ?
+			ORDER BY account_id ASC, booking_date ASC, created_at ASC, id ASC`
+		)
+		.bind(currentDate)
+		.all<AssetTransactionRow>();
+
+	return results;
+}
+
+async function getAssetSnapshots(db: DbClient, currentDate: string): Promise<AssetSnapshotRow[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT account_id, snapshot_date, balance_cents, created_at, id
+			FROM account_balance_snapshots
+			WHERE snapshot_date <= ?
+			ORDER BY account_id ASC, snapshot_date ASC, created_at ASC, id ASC`
+		)
+		.bind(currentDate)
+		.all<AssetSnapshotRow>();
+
+	return results;
+}
+
+function getAssetsCentsAsOf(inputs: AssetInputs, asOfDate: string, currentDate: string): number {
+	return inputs.accounts.reduce(
+		(sum, account) => sum + getAccountBalanceAsOf(inputs, account, asOfDate, currentDate),
+		0
+	);
+}
+
+function getAccountBalanceAsOf(
+	inputs: AssetInputs,
+	account: AssetAccountRow,
+	asOfDate: string,
+	currentDate: string
+): number {
+	const accountTransactions = inputs.transactions.filter(
+		(transaction) => transaction.account_id === account.account_id
+	);
+	const balanceAfter = latestBalanceAfterTransaction(accountTransactions, asOfDate);
+	if (balanceAfter) {
+		return (
+			balanceAfter.balance_after_cents +
+			transactionDelta(accountTransactions, balanceAfter.booking_date, asOfDate)
+		);
+	}
+
+	const snapshot = latestAccountSnapshot(
+		inputs.snapshots.filter((row) => row.account_id === account.account_id),
+		asOfDate
+	);
+	if (snapshot) {
+		return (
+			snapshot.balance_cents +
+			transactionDelta(accountTransactions, snapshot.snapshot_date, asOfDate)
+		);
+	}
+
+	if (account.current_balance_cents !== null) {
+		return (
+			account.current_balance_cents - transactionDelta(accountTransactions, asOfDate, currentDate)
+		);
+	}
+
+	return account.opening_balance_cents + transactionDeltaFromStart(accountTransactions, asOfDate);
+}
+
 async function getActiveLiabilities(
 	db: DbClient,
 	asOfDate: string
@@ -249,6 +364,70 @@ async function getSnapshotPoints(
 		.all<SnapshotPointRow>();
 
 	return results;
+}
+
+async function getBalanceEventDates(db: DbClient, range: ReportDateRange): Promise<string[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT booking_date AS date
+			FROM transactions
+			WHERE booking_date BETWEEN ? AND ?
+			GROUP BY booking_date
+			UNION
+			SELECT as_of_date AS date
+			FROM marked_liabilities
+			WHERE status = 'active'
+				AND as_of_date BETWEEN ? AND ?
+			GROUP BY as_of_date
+			ORDER BY date ASC`
+		)
+		.bind(range.from, range.to, range.from, range.to)
+		.all<DateRow>();
+
+	return results.map((row) => row.date);
+}
+
+function latestBalanceAfterTransaction(
+	transactions: AssetTransactionRow[],
+	asOfDate: string
+): AssetBalanceAfterRow | null {
+	for (let index = transactions.length - 1; index >= 0; index -= 1) {
+		const transaction = transactions[index];
+		if (transaction.booking_date <= asOfDate && transaction.balance_after_cents !== null) {
+			return { ...transaction, balance_after_cents: transaction.balance_after_cents };
+		}
+	}
+
+	return null;
+}
+
+function latestAccountSnapshot(
+	snapshots: AssetSnapshotRow[],
+	asOfDate: string
+): AssetSnapshotRow | null {
+	return snapshots.filter((snapshot) => snapshot.snapshot_date <= asOfDate).at(-1) ?? null;
+}
+
+function transactionDelta(
+	transactions: AssetTransactionRow[],
+	fromExclusive: string,
+	toInclusive: string
+): number {
+	return transactions
+		.filter(
+			(transaction) =>
+				transaction.booking_date > fromExclusive && transaction.booking_date <= toInclusive
+		)
+		.reduce((sum, transaction) => sum + transaction.amount_cents, 0);
+}
+
+function transactionDeltaFromStart(
+	transactions: AssetTransactionRow[],
+	toInclusive: string
+): number {
+	return transactions
+		.filter((transaction) => transaction.booking_date <= toInclusive)
+		.reduce((sum, transaction) => sum + transaction.amount_cents, 0);
 }
 
 function liabilityTotalAsOf(liabilities: NetWorthReport['liabilities'], date: string): number {
@@ -302,11 +481,48 @@ interface AccountBalanceRow extends DbRow {
 	net_to_date_cents: number;
 }
 
+interface AssetAccountRow extends DbRow {
+	account_id: string;
+	opening_balance_cents: number;
+	current_balance_cents: number | null;
+}
+
+interface AssetInputs {
+	accounts: AssetAccountRow[];
+	transactions: AssetTransactionRow[];
+	snapshots: AssetSnapshotRow[];
+}
+
+interface AssetTransactionRow extends DbRow {
+	account_id: string;
+	booking_date: string;
+	amount_cents: number;
+	balance_after_cents: number | null;
+	created_at: string;
+	id: string;
+}
+
+interface AssetBalanceAfterRow extends AssetTransactionRow {
+	balance_after_cents: number;
+}
+
+interface AssetSnapshotRow extends DbRow {
+	account_id: string;
+	snapshot_date: string;
+	balance_cents: number;
+	created_at: string;
+	id: string;
+}
+
 interface LiabilityRow extends DbRow {
 	id: string;
 	name: string;
 	amount_cents: number;
 	as_of_date: string;
+}
+
+interface DateRow extends DbRow {
+	date: string;
 }
 
 interface SnapshotPointRow extends DbRow {
