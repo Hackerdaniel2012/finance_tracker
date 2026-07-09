@@ -107,8 +107,13 @@
 	);
 
 	onMount(() => {
-		void Promise.all([loadAccounts(), loadDashboard()]);
+		void loadHomeState();
 	});
+
+	async function loadHomeState() {
+		await loadAccounts();
+		await loadDashboard();
+	}
 
 	async function loadAccounts() {
 		status = m.setup_status_loading();
@@ -131,14 +136,19 @@
 
 		try {
 			const params = `from=${currentMonthRange.from}&to=${currentMonthRange.to}`;
-			const [summaryPayload, netWorthPayload, paymentsPayload, incomePayload, projectionPayload] =
-				await Promise.all([
-					fetchJson<{ summary: SummaryReport }>(`/api/summary?${params}`),
-					fetchJson<{ netWorth: NetWorthReport }>(`/api/net-worth?${params}`),
-					fetchJson<{ upcomingPayments: UpcomingPayment[] }>('/api/upcoming-payments'),
-					fetchJson<{ upcomingIncome: UpcomingIncome[] }>('/api/upcoming-income'),
-					fetchJson<{ projection: BalanceProjection }>('/api/balance-before-salary')
-				]);
+			const summaryPayload = await fetchJson<{ summary: SummaryReport }>(`/api/summary?${params}`);
+			const netWorthPayload = await fetchJson<{ netWorth: NetWorthReport }>(
+				`/api/net-worth?${params}`
+			);
+			const paymentsPayload = await fetchJson<{ upcomingPayments: UpcomingPayment[] }>(
+				'/api/upcoming-payments'
+			);
+			const incomePayload = await fetchJson<{ upcomingIncome: UpcomingIncome[] }>(
+				'/api/upcoming-income'
+			);
+			const projectionPayload = await fetchJson<{ projection: BalanceProjection }>(
+				'/api/balance-before-salary'
+			);
 
 			summary = summaryPayload.summary;
 			netWorth = netWorthPayload.netWorth;
@@ -172,7 +182,7 @@
 			institution = '';
 			openingBalance = '0.00';
 			status = m.setup_status_saved();
-			await Promise.all([loadAccounts(), loadDashboard()]);
+			await loadHomeState();
 		} catch {
 			status = m.setup_status_error();
 			error = m.setup_status_error();

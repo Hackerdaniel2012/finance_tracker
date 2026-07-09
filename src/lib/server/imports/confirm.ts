@@ -7,6 +7,8 @@ import type { DbClient, DbRow } from '../db-client';
 import { getDateRange, sha256Hex } from './shared';
 import type { ConfirmImportInput, ImportReport } from './types';
 
+const dedupeLookupChunkSize = 50;
+
 export async function confirmImport(
 	db: DbClient,
 	input: ConfirmImportInput
@@ -153,18 +155,26 @@ async function getExistingDedupeKeys(
 		return new Set();
 	}
 
-	const placeholders = uniqueKeys.map(() => '?').join(', ');
-	const { results } = await db
-		.prepare(
-			`SELECT dedupe_key
-			FROM transactions
-			WHERE profile_id = ?
-				AND dedupe_key IN (${placeholders})`
-		)
-		.bind(profileId, ...uniqueKeys)
-		.all<DedupeRow>();
+	const existingKeys = new Set<string>();
+	for (let index = 0; index < uniqueKeys.length; index += dedupeLookupChunkSize) {
+		const chunk = uniqueKeys.slice(index, index + dedupeLookupChunkSize);
+		const placeholders = chunk.map(() => '?').join(', ');
+		const { results } = await db
+			.prepare(
+				`SELECT dedupe_key
+				FROM transactions
+				WHERE profile_id = ?
+					AND dedupe_key IN (${placeholders})`
+			)
+			.bind(profileId, ...chunk)
+			.all<DedupeRow>();
 
-	return new Set(results.map((row) => row.dedupe_key));
+		for (const row of results) {
+			existingKeys.add(row.dedupe_key);
+		}
+	}
+
+	return existingKeys;
 }
 
 async function createBatch(

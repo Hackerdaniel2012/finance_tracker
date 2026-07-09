@@ -6,6 +6,7 @@ import { getDateRange, sha256Hex } from './shared';
 import type { ImportPreview, ImportPreviewInput } from './types';
 
 const sampleRowLimit = 5;
+const duplicateEstimateChunkSize = 50;
 
 export async function previewImport(
 	db: DbClient,
@@ -62,18 +63,23 @@ async function countExistingTransactions(
 		return 0;
 	}
 
-	const placeholders = uniqueKeys.map(() => '?').join(', ');
-	const row = await db
-		.prepare(
-			`SELECT COUNT(*) AS count
-			FROM transactions
-			WHERE profile_id = ?
-				AND dedupe_key IN (${placeholders})`
-		)
-		.bind(profileId, ...uniqueKeys)
-		.first<CountRow>();
+	let count = 0;
+	for (let index = 0; index < uniqueKeys.length; index += duplicateEstimateChunkSize) {
+		const chunk = uniqueKeys.slice(index, index + duplicateEstimateChunkSize);
+		const placeholders = chunk.map(() => '?').join(', ');
+		const row = await db
+			.prepare(
+				`SELECT COUNT(*) AS count
+				FROM transactions
+				WHERE profile_id = ?
+					AND dedupe_key IN (${placeholders})`
+			)
+			.bind(profileId, ...chunk)
+			.first<CountRow>();
+		count += Number(row?.count ?? 0);
+	}
 
-	return Number(row?.count ?? 0);
+	return count;
 }
 
 interface CountRow extends DbRow {
