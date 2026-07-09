@@ -30,7 +30,7 @@ describe('cashflow repository', () => {
 		await seedCashflow();
 
 		await expect(
-			getUpcomingPayments(db, { asOf: '2026-07-08', monthEnd: '2026-07-31' })
+			getUpcomingPayments(db, { asOf: '2026-07-08', monthEnd: '2026-07-31', nextSalaryDate: null })
 		).resolves.toEqual([
 			expect.objectContaining({ payee: 'Power Co', amountCents: 9000, dueDate: '2026-07-10' }),
 			expect.objectContaining({ payee: 'Insurance Co', amountCents: 4500, dueDate: '2026-07-12' }),
@@ -38,7 +38,7 @@ describe('cashflow repository', () => {
 			expect.objectContaining({ payee: 'Rent', amountCents: 80000, dueDate: '2026-07-20' })
 		]);
 		await expect(
-			getUpcomingIncome(db, { asOf: '2026-07-08', monthEnd: '2026-07-31' })
+			getUpcomingIncome(db, { asOf: '2026-07-08', monthEnd: '2026-07-31', nextSalaryDate: null })
 		).resolves.toEqual([
 			expect.objectContaining({
 				payer: 'Payroll GmbH',
@@ -54,12 +54,14 @@ describe('cashflow repository', () => {
 
 		const projection = await getBalanceBeforeSalaryProjection(db, {
 			asOf: '2026-07-08',
-			monthEnd: '2026-07-31'
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null
 		});
 
 		expect(projection).toMatchObject({
 			asOf: '2026-07-08',
 			projectionDate: '2026-07-23',
+			manualNextSalaryDate: null,
 			currentBalanceCents: 150000,
 			upcomingPaymentCents: 95499,
 			projectedBalanceCents: 54501,
@@ -111,7 +113,8 @@ describe('cashflow repository', () => {
 
 		const projection = await getBalanceBeforeSalaryProjection(db, {
 			asOf: '2026-07-08',
-			monthEnd: '2026-07-31'
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null
 		});
 
 		expect(projection).toMatchObject({
@@ -149,7 +152,8 @@ describe('cashflow repository', () => {
 
 		const projection = await getBalanceBeforeSalaryProjection(db, {
 			asOf: '2026-07-08',
-			monthEnd: '2026-07-31'
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null
 		});
 
 		expect(projection).toMatchObject({
@@ -159,6 +163,29 @@ describe('cashflow repository', () => {
 			upcomingPaymentCents: 9000,
 			projectedBalanceCents: 41000
 		});
+	});
+
+	it('uses an explicit manual next salary date before inferred income', async () => {
+		await seedCashflow();
+
+		const projection = await getBalanceBeforeSalaryProjection(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: '2026-07-18'
+		});
+
+		expect(projection).toMatchObject({
+			projectionDate: '2026-07-17',
+			manualNextSalaryDate: '2026-07-18',
+			nextIncome: { payer: 'Payroll GmbH', dueDate: '2026-07-24' },
+			upcomingPaymentCents: 15499,
+			projectedBalanceCents: 134501
+		});
+		expect(projection.upcomingPayments.map((payment) => payment.payee)).toEqual([
+			'Power Co',
+			'Insurance Co',
+			'Gym'
+		]);
 	});
 });
 

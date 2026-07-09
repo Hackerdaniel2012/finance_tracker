@@ -57,6 +57,61 @@ describe('/api/balance-before-salary', () => {
 			}
 		});
 	});
+
+	it('uses an explicit manual next salary date override', async () => {
+		const account = await createAccount(db, { name: 'Main Giro', currentBalanceCents: 150000 });
+		await createPlannedPayment(db, {
+			accountId: account.id,
+			payee: 'Power',
+			amountCents: 10000,
+			dueDate: '2026-07-10'
+		});
+		await createPlannedPayment(db, {
+			accountId: account.id,
+			payee: 'Rent',
+			amountCents: 80000,
+			dueDate: '2026-07-20'
+		});
+		await createPlannedIncome(db, {
+			accountId: account.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+
+		const response = await GET(
+			event('http://localhost/api/balance-before-salary?asOf=2026-07-08&nextSalaryDate=2026-07-18')
+		);
+
+		await expect(response.json()).resolves.toMatchObject({
+			projection: {
+				projectionDate: '2026-07-17',
+				manualNextSalaryDate: '2026-07-18',
+				currentBalanceCents: 150000,
+				upcomingPaymentCents: 10000,
+				projectedBalanceCents: 140000,
+				nextIncome: { payer: 'Employer' }
+			}
+		});
+	});
+
+	it('returns validation errors for invalid manual next salary dates', async () => {
+		const malformed = await GET(
+			event('http://localhost/api/balance-before-salary?asOf=2026-07-08&nextSalaryDate=bad')
+		);
+		expect(malformed.status).toBe(400);
+		await expect(malformed.json()).resolves.toEqual({
+			error: 'nextSalaryDate must be an ISO date'
+		});
+
+		const past = await GET(
+			event('http://localhost/api/balance-before-salary?asOf=2026-07-08&nextSalaryDate=2026-07-08')
+		);
+		expect(past.status).toBe(400);
+		await expect(past.json()).resolves.toEqual({
+			error: 'nextSalaryDate must be after asOf'
+		});
+	});
 });
 
 function event(url: string) {

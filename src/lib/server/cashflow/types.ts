@@ -1,6 +1,7 @@
 export interface CashflowWindow {
 	asOf: string;
 	monthEnd: string;
+	nextSalaryDate: string | null;
 }
 
 export interface UpcomingPayment {
@@ -30,6 +31,7 @@ export interface UpcomingIncome {
 export interface BalanceBeforeSalaryProjection {
 	asOf: string;
 	projectionDate: string;
+	manualNextSalaryDate: string | null;
 	nextIncome: UpcomingIncome | null;
 	currentBalanceCents: number;
 	upcomingPaymentCents: number;

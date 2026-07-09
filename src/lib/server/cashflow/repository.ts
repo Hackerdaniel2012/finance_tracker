@@ -40,7 +40,8 @@ export async function getBalanceBeforeSalaryProjection(
 		getNextIncome(db, window),
 		getAccountBalances(db, window.asOf)
 	]);
-	const projectionDate = nextIncome ? previousDate(nextIncome.dueDate) : window.monthEnd;
+	const salaryDate = window.nextSalaryDate ?? nextIncome?.dueDate ?? null;
+	const projectionDate = salaryDate ? previousDate(salaryDate) : window.monthEnd;
 	const upcomingPayments = await getPaymentsThroughDate(db, window.asOf, projectionDate);
 	const upcomingPaymentCents = upcomingPayments.reduce(
 		(sum, payment) => sum + payment.amountCents,
@@ -57,6 +58,7 @@ export async function getBalanceBeforeSalaryProjection(
 	return {
 		asOf: window.asOf,
 		projectionDate,
+		manualNextSalaryDate: window.nextSalaryDate,
 		nextIncome,
 		currentBalanceCents,
 		upcomingPaymentCents,
@@ -164,7 +166,11 @@ async function getPaymentsThroughDate(
 		return [];
 	}
 
-	const payments = await getUpcomingPayments(db, { asOf: from, monthEnd: to });
+	const payments = await getUpcomingPayments(db, {
+		asOf: from,
+		monthEnd: to,
+		nextSalaryDate: null
+	});
 	return payments.filter((payment) => payment.dueDate <= to);
 }
 

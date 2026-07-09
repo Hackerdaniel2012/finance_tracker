@@ -123,6 +123,7 @@
 	interface BalanceProjection {
 		asOf: string;
 		projectionDate: string;
+		manualNextSalaryDate: string | null;
 		nextIncome: UpcomingIncome | null;
 		currentBalanceCents: number;
 		upcomingPaymentCents: number;
@@ -190,6 +191,7 @@
 	let liabilityStatus = $state<LiabilityStatus>('active');
 	let liabilityAccountId = $state('');
 	let liabilityNote = $state('');
+	let manualNextSalaryDate = $state('');
 
 	const upcomingPaymentTotal = $derived(
 		upcomingPayments.reduce((sum, payment) => sum + payment.amountCents, 0)
@@ -235,7 +237,7 @@
 				fetchJson<{ recurringGroups: RecurringGroup[] }>('/api/recurring'),
 				fetchJson<{ upcomingPayments: UpcomingPayment[] }>('/api/upcoming-payments'),
 				fetchJson<{ upcomingIncome: UpcomingIncome[] }>('/api/upcoming-income'),
-				fetchJson<{ projection: BalanceProjection }>('/api/balance-before-salary')
+				fetchJson<{ projection: BalanceProjection }>(balanceBeforeSalaryUrl())
 			]);
 
 			accounts = accountPayload.accounts;
@@ -405,6 +407,11 @@
 		}
 	}
 
+	async function applyManualNextSalaryDate(event: SubmitEvent) {
+		event.preventDefault();
+		await loadPlanningState();
+	}
+
 	async function updateLiabilityStatus(liability: Liability, nextStatus: LiabilityStatus) {
 		await patchAndReload('/api/liabilities', { id: liability.id, status: nextStatus });
 	}
@@ -466,6 +473,14 @@
 		}
 
 		return (await response.json()) as T;
+	}
+
+	function balanceBeforeSalaryUrl(): string {
+		if (manualNextSalaryDate) {
+			return `/api/balance-before-salary?nextSalaryDate=${encodeURIComponent(manualNextSalaryDate)}`;
+		}
+
+		return '/api/balance-before-salary';
 	}
 
 	function todayIso(): string {
@@ -1117,10 +1132,28 @@
 				</div>
 				<div class="rounded border border-zinc-200 bg-zinc-50 p-4 text-sm">
 					<p class="font-medium text-zinc-950">{m.balance_before_salary()}</p>
+					<form class="mt-3 grid gap-2" onsubmit={applyManualNextSalaryDate}>
+						<label class="grid gap-1 text-sm font-medium text-zinc-700">
+							<span>{m.manual_next_salary_date()}</span>
+							<input
+								class="w-full rounded border-zinc-300"
+								type="date"
+								bind:value={manualNextSalaryDate}
+							/>
+						</label>
+						<button
+							class="rounded border border-zinc-300 px-3 py-2 text-xs font-medium text-zinc-700"
+							type="submit"
+						>
+							{m.apply_projection_date()}
+						</button>
+					</form>
 					<p class="mt-1 text-zinc-600">
-						{projection?.nextIncome
-							? `${m.next_income()}: ${projection.nextIncome.payer} ${formatDate(projection.nextIncome.dueDate)}`
-							: m.no_upcoming_income()}
+						{projection?.manualNextSalaryDate
+							? `${m.manual_salary_date()}: ${formatDate(projection.manualNextSalaryDate)}`
+							: projection?.nextIncome
+								? `${m.next_income()}: ${projection.nextIncome.payer} ${formatDate(projection.nextIncome.dueDate)}`
+								: m.no_upcoming_income()}
 					</p>
 					<p class="mt-2 text-lg font-semibold text-zinc-950">
 						{projection ? centsToEuros(projection.projectedBalanceCents) : m.not_available()}

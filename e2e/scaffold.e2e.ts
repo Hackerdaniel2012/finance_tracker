@@ -57,4 +57,7 @@ test('renders the planning shell', async ({ page }) => {
 	await expect(
 		page.getByRole('heading', { name: /^liabilities$|^verbindlichkeiten$/i })
 	).toBeVisible();
+	await expect(
+		page.getByLabel(/manual next salary date|manuelles naechstes gehaltsdatum/i)
+	).toBeVisible();
 });
