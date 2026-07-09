@@ -16,7 +16,11 @@ export default defineConfig({
 			},
 			adapter: adapter()
 		}),
-		paraglideVitePlugin({ project: './project.inlang', outdir: './src/lib/paraglide' })
+		paraglideVitePlugin({
+			project: './project.inlang',
+			outdir: './src/lib/paraglide',
+			disableAsyncLocalStorage: true
+		})
 	],
 	test: {
 		expect: { requireAssertions: true },

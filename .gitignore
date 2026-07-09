@@ -27,3 +27,4 @@ test-results
 src/lib/paraglide
 project.inlang/cache/
 example_data/
+.playwright-mcp/
