@@ -21,3 +21,11 @@ test('renders the CSV import shell', async ({ page }) => {
 	await expect(page.getByRole('heading', { name: /upload csv|csv hochladen/i })).toBeVisible();
 	await expect(page.getByRole('button', { name: /preview import|import pruefen/i })).toBeVisible();
 });
+
+test('renders the transaction review shell', async ({ page }) => {
+	await page.goto('/transactions');
+
+	await expect(page.getByRole('heading', { name: /transactions|transaktionen/i })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /filters|filter/i })).toBeVisible();
+	await expect(page.getByRole('button', { name: /apply filters|filter anwenden/i })).toBeVisible();
+});

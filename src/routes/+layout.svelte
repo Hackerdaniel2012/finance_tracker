@@ -25,8 +25,9 @@
 					class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950"
 					href={resolve('/imports')}>{m.nav_imports()}</a
 				>
-				<a class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" href={resolve('/')}
-					>{m.nav_transactions()}</a
+				<a
+					class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950"
+					href={resolve('/transactions')}>{m.nav_transactions()}</a
 				>
 				<a class="rounded px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" href={resolve('/')}
 					>{m.nav_planning()}</a
