@@ -1,6 +1,7 @@
 export type TransactionClassificationStatus = 'unknown' | 'auto' | 'manual' | 'ignored';
 export type TransactionSort = 'booking_date' | 'amount_cents' | 'payee';
 export type SortDirection = 'asc' | 'desc';
+export type TransactionDirection = 'income' | 'expense';
 
 export interface TransactionTag {
 	id: string;
@@ -45,6 +46,10 @@ export interface TransactionListFilters {
 	profileId?: string;
 	categoryId?: string;
 	status?: TransactionClassificationStatus;
+	transactionDirection?: TransactionDirection;
+	minAmountCents?: number;
+	maxAmountCents?: number;
+	tag?: string;
 	search?: string;
 	from?: string;
 	to?: string;

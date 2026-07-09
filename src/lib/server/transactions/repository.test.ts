@@ -67,7 +67,8 @@ describe('transaction repository', () => {
 			limit: 10,
 			offset: 0
 		});
-		const transactionId = unknown.transactions[0]?.id ?? '';
+		const transactionId =
+			unknown.transactions.find((transaction) => transaction.payee === 'Cafe')?.id ?? '';
 
 		const updated = await updateTransaction(db, {
 			id: transactionId,
@@ -96,6 +97,66 @@ describe('transaction repository', () => {
 		expect(
 			firstValue<string>(sqlite, "SELECT pattern FROM category_rules WHERE name = 'Cafe rule'")
 		).toBe('Cafe');
+	});
+
+	it('filters transactions by direction, amount range, and tag', async () => {
+		await seedTransactions();
+		const all = await listTransactions(db, baseFilters());
+		const cafe = all.transactions.find((transaction) => transaction.payee === 'Cafe');
+		const salary = all.transactions.find((transaction) => transaction.payee === 'Employer');
+		expect(cafe).toBeDefined();
+		expect(salary).toBeDefined();
+
+		const tagged = await updateTransaction(db, {
+			id: cafe?.id ?? '',
+			tagNames: ['Coffee']
+		});
+		await updateTransaction(db, {
+			id: salary?.id ?? '',
+			tagNames: ['Income']
+		});
+
+		await expect(
+			listTransactions(db, {
+				...baseFilters(),
+				transactionDirection: 'income'
+			})
+		).resolves.toMatchObject({
+			pagination: { total: 1 },
+			transactions: [{ payee: 'Employer', amountCents: 250000 }]
+		});
+
+		await expect(
+			listTransactions(db, {
+				...baseFilters(),
+				transactionDirection: 'expense',
+				minAmountCents: -500,
+				maxAmountCents: -100
+			})
+		).resolves.toMatchObject({
+			pagination: { total: 1 },
+			transactions: [{ payee: 'Cafe', amountCents: -400 }]
+		});
+
+		await expect(
+			listTransactions(db, {
+				...baseFilters(),
+				tag: 'Coffee'
+			})
+		).resolves.toMatchObject({
+			pagination: { total: 1 },
+			transactions: [{ payee: 'Cafe' }]
+		});
+
+		await expect(
+			listTransactions(db, {
+				...baseFilters(),
+				tag: tagged.tags[0]?.id
+			})
+		).resolves.toMatchObject({
+			pagination: { total: 1 },
+			transactions: [{ payee: 'Cafe' }]
+		});
 	});
 
 	it('returns not found errors for missing transactions and categories', async () => {
@@ -137,7 +198,8 @@ async function seedTransactions() {
 	});
 	const csv = dkbCsv([
 		'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"',
-		'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"'
+		'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"',
+		'"10.07.26";"10.07.26";"Gebucht";"Employer";"Me";"Salary";"Eingang";"DE";"2500,00";"";"";"ref-salary"'
 	]);
 
 	await confirmImport(db, {

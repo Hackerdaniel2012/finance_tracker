@@ -185,6 +185,37 @@ function buildTransactionWhere(filters: TransactionListFilters): {
 		values.push(filters.status);
 	}
 
+	if (filters.transactionDirection === 'income') {
+		clauses.push('t.amount_cents > 0');
+	}
+
+	if (filters.transactionDirection === 'expense') {
+		clauses.push('t.amount_cents < 0');
+	}
+
+	if (filters.minAmountCents !== undefined) {
+		clauses.push('t.amount_cents >= ?');
+		values.push(filters.minAmountCents);
+	}
+
+	if (filters.maxAmountCents !== undefined) {
+		clauses.push('t.amount_cents <= ?');
+		values.push(filters.maxAmountCents);
+	}
+
+	if (filters.tag) {
+		clauses.push(
+			`EXISTS (
+				SELECT 1
+				FROM transaction_tags filter_tt
+				INNER JOIN tags filter_tags ON filter_tags.id = filter_tt.tag_id
+				WHERE filter_tt.transaction_id = t.id
+					AND (filter_tags.id = ? OR filter_tags.name = ?)
+			)`
+		);
+		values.push(filters.tag, filters.tag);
+	}
+
 	if (filters.from) {
 		clauses.push('t.booking_date >= ?');
 		values.push(filters.from);

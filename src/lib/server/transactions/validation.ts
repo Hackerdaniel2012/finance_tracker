@@ -2,6 +2,7 @@ import { ValidationError } from '../accounts/errors';
 import type {
 	SortDirection,
 	TransactionClassificationStatus,
+	TransactionDirection,
 	TransactionListFilters,
 	TransactionSort,
 	UpdateTransactionInput
@@ -10,19 +11,43 @@ import type {
 const statuses = new Set<TransactionClassificationStatus>(['unknown', 'auto', 'manual', 'ignored']);
 const sorts = new Set<TransactionSort>(['booking_date', 'amount_cents', 'payee']);
 const directions = new Set<SortDirection>(['asc', 'desc']);
+const transactionDirections = new Set<TransactionDirection>(['income', 'expense']);
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseTransactionFilters(url: URL): TransactionListFilters {
+	const direction = url.searchParams.get('direction');
+	const transactionDirection =
+		optionalTransactionDirection(
+			url.searchParams.get('transactionDirection'),
+			'transactionDirection'
+		) ?? optionalTransactionDirection(direction, 'direction');
+	const minAmountCents = optionalInteger(url.searchParams.get('minAmountCents'), 'minAmountCents');
+	const maxAmountCents = optionalInteger(url.searchParams.get('maxAmountCents'), 'maxAmountCents');
+	if (
+		minAmountCents !== undefined &&
+		maxAmountCents !== undefined &&
+		minAmountCents > maxAmountCents
+	) {
+		throw new ValidationError('minAmountCents must be less than or equal to maxAmountCents');
+	}
+
 	return {
 		accountId: optionalQueryString(url, 'accountId'),
 		profileId: optionalQueryString(url, 'profileId'),
 		categoryId: optionalQueryString(url, 'categoryId'),
 		status: optionalStatus(url.searchParams.get('status')),
+		transactionDirection,
+		minAmountCents,
+		maxAmountCents,
+		tag: optionalQueryString(url, 'tag'),
 		search: optionalQueryString(url, 'search'),
 		from: optionalDate(url.searchParams.get('from'), 'from'),
 		to: optionalDate(url.searchParams.get('to'), 'to'),
 		sort: optionalSort(url.searchParams.get('sort')) ?? 'booking_date',
-		direction: optionalDirection(url.searchParams.get('direction')) ?? 'desc',
+		direction:
+			optionalDirection(url.searchParams.get('sortDirection'), 'sortDirection') ??
+			optionalDirection(direction, 'direction') ??
+			'desc',
 		limit: optionalPositiveInteger(url.searchParams.get('limit'), 'limit') ?? 50,
 		offset: optionalNonNegativeInteger(url.searchParams.get('offset'), 'offset') ?? 0
 	};
@@ -92,16 +117,37 @@ function optionalSort(value: string | null): TransactionSort | undefined {
 	return value as TransactionSort;
 }
 
-function optionalDirection(value: string | null): SortDirection | undefined {
+function optionalDirection(value: string | null, field: string): SortDirection | undefined {
 	if (value === null || value === '') {
 		return undefined;
 	}
 
 	if (!directions.has(value as SortDirection)) {
-		throw new ValidationError('direction must be one of asc, desc');
+		if (field === 'direction' && transactionDirections.has(value as TransactionDirection)) {
+			return undefined;
+		}
+		throw new ValidationError(`${field} must be one of asc, desc`);
 	}
 
 	return value as SortDirection;
+}
+
+function optionalTransactionDirection(
+	value: string | null,
+	field: string
+): TransactionDirection | undefined {
+	if (value === null || value === '') {
+		return undefined;
+	}
+
+	if (!transactionDirections.has(value as TransactionDirection)) {
+		if (field === 'direction') {
+			return undefined;
+		}
+		throw new ValidationError(`${field} must be one of income, expense`);
+	}
+
+	return value as TransactionDirection;
 }
 
 function optionalDate(value: string | null, field: string): string | undefined {
@@ -124,6 +170,19 @@ function optionalPositiveInteger(value: string | null, field: string): number | 
 	const parsed = Number(value);
 	if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
 		throw new ValidationError(`${field} must be an integer between 1 and 200`);
+	}
+
+	return parsed;
+}
+
+function optionalInteger(value: string | null, field: string): number | undefined {
+	if (value === null || value === '') {
+		return undefined;
+	}
+
+	const parsed = Number(value);
+	if (!Number.isInteger(parsed)) {
+		throw new ValidationError(`${field} must be an integer`);
 	}
 
 	return parsed;

@@ -40,6 +40,28 @@ describe('/api/transactions', () => {
 		});
 	});
 
+	it('lists transactions with expanded backend filters', async () => {
+		await seedTransactions();
+
+		const incomeResponse = await GET(
+			event('http://localhost/api/transactions?direction=income&minAmountCents=100000')
+		);
+		await expect(incomeResponse.json()).resolves.toMatchObject({
+			pagination: { total: 1 },
+			transactions: [{ payee: 'Employer', amountCents: 250000 }]
+		});
+
+		const expenseResponse = await GET(
+			event(
+				'http://localhost/api/transactions?transactionDirection=expense&minAmountCents=-500&maxAmountCents=-100'
+			)
+		);
+		await expect(expenseResponse.json()).resolves.toMatchObject({
+			pagination: { total: 1 },
+			transactions: [{ payee: 'Cafe', amountCents: -400 }]
+		});
+	});
+
 	it('returns validation errors for invalid filters', async () => {
 		const response = await GET(event('http://localhost/api/transactions?status=bad'));
 
@@ -74,7 +96,8 @@ async function seedTransactions() {
 	});
 	const csv = dkbCsv([
 		'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"',
-		'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"'
+		'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"',
+		'"10.07.26";"10.07.26";"Gebucht";"Employer";"Me";"Salary";"Eingang";"DE";"2500,00";"";"";"ref-salary"'
 	]);
 
 	await confirmImport(db, {
