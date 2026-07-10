@@ -774,7 +774,10 @@
 					{#if editingContractId === contract.id}
 						<form
 							class="grid gap-4 border-b border-zinc-200 bg-zinc-50 px-5 py-4"
-							onsubmit={(event) => saveContract(event, contract.id)}
+							onsubmit={(event) => {
+								event.preventDefault();
+								void saveContract(event, contract.id);
+							}}
 						>
 							<div class="grid gap-4 sm:grid-cols-2">
 								<label class="grid gap-1 text-sm font-medium text-zinc-700">
