@@ -1,8 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-	applySql,
+	applyMigrations,
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
@@ -21,8 +19,7 @@ let db: DbClient;
 
 beforeEach(async () => {
 	const sqlite = await createTestDatabase();
-	applySql(sqlite, await readFile(resolve('migrations/0001_initial_schema.sql'), 'utf8'));
-	applySql(sqlite, await readFile(resolve('migrations/0002_seed_default_categories.sql'), 'utf8'));
+	await applyMigrations(sqlite);
 	db = createTestDbClient(sqlite);
 });
 
@@ -435,6 +432,74 @@ describe('cashflow repository', () => {
 		]);
 	});
 
+	it('scopes month cashflow actuals by subaccount', async () => {
+		const account = await createAccount(db, { name: 'Main Giro' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'Main CSV'
+		});
+		await insertTransaction(profile.id, account.id, 'main-income', '2026-07-02', 200000, 'Main');
+		await insertTransaction(profile.id, account.id, 'main-expense', '2026-07-08', -45000, 'Main');
+		await insertTransaction(profile.id, account.id, 'sub-income', '2026-07-03', 50000, 'Side');
+
+		const all = await getMonthCashflowReport(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null,
+			accountId: account.id
+		});
+		expect(all.actual).toMatchObject({
+			incomeCents: 250000,
+			expenseCents: -45000,
+			netCents: 205000
+		});
+
+		const scoped = await getMonthCashflowReport(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null,
+			accountId: account.id,
+			subaccount: 'Side'
+		});
+		expect(scoped.actual).toMatchObject({
+			incomeCents: 50000,
+			expenseCents: 0,
+			netCents: 50000
+		});
+	});
+
+	it('scopes balance-before-salary current balance by subaccount', async () => {
+		const account = await createAccount(db, {
+			name: 'Main Giro',
+			currentBalanceCents: 150000
+		});
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'Main CSV'
+		});
+		await insertTransaction(profile.id, account.id, 'main-debit', '2026-07-01', -20000, 'Main');
+		await insertTransaction(profile.id, account.id, 'side-debit', '2026-07-02', -10000, 'Side');
+
+		const all = await getBalanceBeforeSalaryProjection(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null,
+			accountId: account.id
+		});
+		expect(all.currentBalanceCents).toBe(150000);
+
+		const scoped = await getBalanceBeforeSalaryProjection(db, {
+			asOf: '2026-07-08',
+			monthEnd: '2026-07-31',
+			nextSalaryDate: null,
+			accountId: account.id,
+			subaccount: 'Side'
+		});
+		expect(scoped.currentBalanceCents).toBe(-10000);
+	});
+
 	it('filters balance-before-salary projection by account', async () => {
 		const main = await createAccount(db, {
 			name: 'Main Giro',
@@ -493,15 +558,16 @@ async function insertTransaction(
 	accountId: string,
 	id: string,
 	bookingDate: string,
-	amountCents: number
+	amountCents: number,
+	subaccount?: string
 ) {
 	await db
 		.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text
-			) VALUES (?, ?, ?, ?, ?, ?, '')`
+				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, subaccount, search_text
+			) VALUES (?, ?, ?, ?, ?, ?, ?, '')`
 		)
-		.bind(id, profileId, accountId, id, bookingDate, amountCents)
+		.bind(id, profileId, accountId, id, bookingDate, amountCents, subaccount ?? null)
 		.run();
 }
 

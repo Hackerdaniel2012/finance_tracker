@@ -1,8 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-	applySql,
+	applyMigrations,
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
@@ -16,8 +14,7 @@ let db: DbClient;
 
 beforeEach(async () => {
 	const sqlite = await createTestDatabase();
-	applySql(sqlite, await readFile(resolve('migrations/0001_initial_schema.sql'), 'utf8'));
-	applySql(sqlite, await readFile(resolve('migrations/0002_seed_default_categories.sql'), 'utf8'));
+	await applyMigrations(sqlite);
 	db = createTestDbClient(sqlite);
 });
 
@@ -40,6 +37,40 @@ describe('/api/summary', () => {
 		});
 	});
 
+	it('filters summary totals by subaccount', async () => {
+		const account = await seedN26Transactions();
+
+		const allResponse = await GET(
+			event(`http://localhost/api/summary?from=2026-07-01&to=2026-07-31&accountId=${account.id}`)
+		);
+		await expect(allResponse.json()).resolves.toMatchObject({
+			summary: {
+				totals: {
+					incomeCents: 250000,
+					expenseCents: -1634,
+					netCents: 248366,
+					transactionCount: 3
+				}
+			}
+		});
+
+		const mainResponse = await GET(
+			event(
+				`http://localhost/api/summary?from=2026-07-01&to=2026-07-31&accountId=${account.id}&subaccount=Hauptkonto`
+			)
+		);
+		await expect(mainResponse.json()).resolves.toMatchObject({
+			summary: {
+				totals: {
+					incomeCents: 0,
+					expenseCents: -1634,
+					netCents: -1634,
+					transactionCount: 2
+				}
+			}
+		});
+	});
+
 	it('returns validation errors for invalid ranges', async () => {
 		const response = await GET(event('http://localhost/api/summary?from=2026-08-01&to=2026-07-01'));
 
@@ -49,6 +80,35 @@ describe('/api/summary', () => {
 		});
 	});
 });
+
+async function seedN26Transactions() {
+	const account = await createAccount(db, { name: 'N26' });
+	const profile = await createProfile(db, {
+		accountId: account.id,
+		bankId: 'n26',
+		label: 'N26 CSV'
+	});
+	const csv = n26Csv([
+		'2026-07-08,,Shop,DE,"Debit Transfer",Groceries,"Hauptkonto",-12.34,,,',
+		'2026-07-09,,Cafe,DE,"Debit Transfer",Coffee,"Hauptkonto",-4.00,,,',
+		'2026-07-10,,Employer,DE,"Credit Transfer",Salary,"20k in 2023",2500.00,,,'
+	]);
+
+	await confirmImport(db, {
+		profileId: profile.id,
+		csv,
+		expectedHash: await sha256Hex(csv)
+	});
+
+	return account;
+}
+
+function n26Csv(rows: string[]): string {
+	return [
+		'"Booking Date","Value Date","Partner Name","Partner Iban",Type,"Payment Reference","Account Name","Amount (EUR)","Original Amount","Original Currency","Exchange Rate"',
+		...rows
+	].join('\n');
+}
 
 function event(url: string) {
 	return {

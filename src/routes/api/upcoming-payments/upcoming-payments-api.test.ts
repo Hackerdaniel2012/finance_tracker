@@ -1,8 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-	applySql,
+	applyMigrations,
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
@@ -15,8 +13,7 @@ let db: DbClient;
 
 beforeEach(async () => {
 	const sqlite = await createTestDatabase();
-	applySql(sqlite, await readFile(resolve('migrations/0001_initial_schema.sql'), 'utf8'));
-	applySql(sqlite, await readFile(resolve('migrations/0002_seed_default_categories.sql'), 'utf8'));
+	await applyMigrations(sqlite);
 	db = createTestDbClient(sqlite);
 });
 

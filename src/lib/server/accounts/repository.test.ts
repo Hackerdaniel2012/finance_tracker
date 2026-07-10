@@ -1,8 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-	applySql,
+	applyMigrations,
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
@@ -25,7 +23,7 @@ let db: DbClient;
 
 beforeEach(async () => {
 	const sqlite = await createTestDatabase();
-	applySql(sqlite, await readFile(resolve('migrations/0001_initial_schema.sql'), 'utf8'));
+	await applyMigrations(sqlite);
 	db = createTestDbClient(sqlite);
 });
 
@@ -90,6 +88,58 @@ describe('account repository', () => {
 		await expect(updateAccount(db, { id: 'missing', name: 'Nope' })).rejects.toBeInstanceOf(
 			NotFoundError
 		);
+	});
+
+	it('lists distinct subaccounts for an account from its transactions', async () => {
+		const account = await createAccount(db, { name: 'N26' });
+		const otherAccount = await createAccount(db, { name: 'DKB' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'N26 CSV'
+		});
+
+		db.prepare(
+			`INSERT INTO transactions (
+				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+			.bind('txn-1', profile.id, account.id, 'dedupe-1', '2026-07-08', -100, 'coffee', 'Hauptkonto')
+			.run();
+		db.prepare(
+			`INSERT INTO transactions (
+				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+			.bind(
+				'txn-2',
+				profile.id,
+				account.id,
+				'dedupe-2',
+				'2026-07-09',
+				-200,
+				'groceries',
+				'20k in 2023'
+			)
+			.run();
+		db.prepare(
+			`INSERT INTO transactions (
+				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		)
+			.bind('txn-3', profile.id, account.id, 'dedupe-3', '2026-07-10', -300, 'fuel', 'Hauptkonto')
+			.run();
+
+		const accounts = await listAccounts(db);
+		const mapped = accounts.map((account) => ({
+			id: account.id,
+			subaccounts: account.subaccounts
+		}));
+
+		expect(mapped).toEqual([
+			{ id: account.id, subaccounts: ['20k in 2023', 'Hauptkonto'] },
+			{ id: otherAccount.id, subaccounts: [] }
+		]);
 	});
 });
 

@@ -1,8 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-	applySql,
+	applyMigrations,
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
@@ -14,7 +12,7 @@ let db: DbClient;
 
 beforeEach(async () => {
 	const sqlite = await createTestDatabase();
-	applySql(sqlite, await readFile(resolve('migrations/0001_initial_schema.sql'), 'utf8'));
+	await applyMigrations(sqlite);
 	db = createTestDbClient(sqlite);
 });
 
@@ -96,6 +94,59 @@ describe('/api/accounts', () => {
 
 		await expect(response.json()).resolves.toMatchObject({
 			accounts: [{ id: account.id, profile: { id: 'profile-1', bankId: 'trade_republic' } }]
+		});
+	});
+
+	it('includes discovered subaccounts for N26 accounts', async () => {
+		const account = await createAccount(db, { name: 'N26' });
+		await db
+			.prepare('INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES (?, ?, ?, ?)')
+			.bind('profile-1', account.id, 'n26', 'N26 CSV')
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			)
+			.bind(
+				'txn-1',
+				'profile-1',
+				account.id,
+				'dedupe-1',
+				'2026-07-08',
+				-100,
+				'coffee',
+				'Hauptkonto'
+			)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			)
+			.bind(
+				'txn-2',
+				'profile-1',
+				account.id,
+				'dedupe-2',
+				'2026-07-09',
+				-200,
+				'groceries',
+				'20k in 2023'
+			)
+			.run();
+
+		const response = await GET(event());
+
+		await expect(response.json()).resolves.toMatchObject({
+			accounts: [
+				{
+					id: account.id,
+					subaccounts: ['20k in 2023', 'Hauptkonto']
+				}
+			]
 		});
 	});
 });
