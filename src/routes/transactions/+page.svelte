@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import { buildAccountScopeOptions, parseAccountScope } from '$lib/account-scope';
 	import { onMount } from 'svelte';
 
 	type TransactionClassificationStatus = 'unknown' | 'auto' | 'manual' | 'ignored';
@@ -12,6 +13,7 @@
 		id: string;
 		name: string;
 		institution: string | null;
+		subaccounts: string[];
 	}
 
 	interface Category {
@@ -60,7 +62,7 @@
 	let search = $state('');
 	let from = $state('');
 	let to = $state('');
-	let accountFilter = $state('');
+	let accountScope = $state('');
 	let statusFilter = $state('');
 	let categoryFilter = $state('');
 	let transactionDirectionFilter = $state('');
@@ -213,7 +215,11 @@
 		if (search.trim()) params.push(['search', search.trim()]);
 		if (from) params.push(['from', from]);
 		if (to) params.push(['to', to]);
-		if (accountFilter) params.push(['accountId', accountFilter]);
+		if (accountScope) {
+			const { accountId, subaccount } = parseAccountScope(accountScope);
+			params.push(['accountId', accountId]);
+			if (subaccount) params.push(['subaccount', subaccount]);
+		}
 		if (statusFilter) params.push(['status', statusFilter]);
 		if (categoryFilter) params.push(['categoryId', categoryFilter]);
 		if (transactionDirectionFilter)
@@ -332,11 +338,11 @@
 				<select
 					aria-label={m.account()}
 					class="w-full rounded border-zinc-300"
-					bind:value={accountFilter}
+					bind:value={accountScope}
 				>
 					<option value="">{m.all_accounts()}</option>
-					{#each accounts as account (account.id)}
-						<option value={account.id}>{account.name}</option>
+					{#each buildAccountScopeOptions(accounts) as option (option.value)}
+						<option value={option.value}>{option.label}</option>
 					{/each}
 				</select>
 			</label>

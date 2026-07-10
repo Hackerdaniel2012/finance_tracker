@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
-	import type { MonthCashflowReport, UpcomingIncome, UpcomingPayment } from '$lib/cashflow';
+	import type { MonthCashflowReport, UpcomingIncome } from '$lib/cashflow';
+	import { buildAccountScopeOptions, buildAccountScopeQuery } from '$lib/account-scope';
 	import { LineChart } from 'layerchart/svg';
 	import { onMount } from 'svelte';
 
@@ -13,6 +14,7 @@
 		openingBalanceCents: number;
 		currentBalanceCents: number | null;
 		profile: { id: string; bankId: BankId; label: string } | null;
+		subaccounts: string[];
 	}
 
 	interface SummaryReport {
@@ -77,7 +79,7 @@
 	let profileAccountId = $state('');
 	let profileLabel = $state('');
 	let profileBankId = $state<BankId>('dkb');
-	let dashboardAccountId = $state('');
+	let dashboardAccountScope = $state('');
 	let isSaving = $state(false);
 
 	const netWorthPoints = $derived(
@@ -226,7 +228,7 @@
 	}
 
 	function buildDashboardReportQuery(): string {
-		return dashboardAccountId ? `?accountId=${encodeURIComponent(dashboardAccountId)}` : '';
+		return dashboardAccountScope ? buildAccountScopeQuery(dashboardAccountScope) : '';
 	}
 
 	function getAccountBalanceCents(account: AccountWithProfile): number {
@@ -271,11 +273,11 @@
 						<select
 							class="min-w-48 rounded border-zinc-300"
 							aria-label={m.dashboard_account_scope()}
-							bind:value={dashboardAccountId}
+							bind:value={dashboardAccountScope}
 						>
 							<option value="">{m.all_accounts()}</option>
-							{#each accounts as account (account.id)}
-								<option value={account.id}>{account.name}</option>
+							{#each buildAccountScopeOptions(accounts) as option (option.value)}
+								<option value={option.value}>{option.label}</option>
 							{/each}
 						</select>
 					</label>
