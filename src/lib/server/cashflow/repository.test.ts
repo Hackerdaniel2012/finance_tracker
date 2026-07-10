@@ -257,11 +257,14 @@ describe('cashflow repository', () => {
 			name: 'Main Giro',
 			currentBalanceCents: 150000
 		});
-		await createPlannedIncome(db, {
+		await createContract(db, {
 			accountId: account.id,
-			payer: 'Employer',
-			amountCents: 250000,
-			dueDate: '2026-07-25'
+			name: 'Salary',
+			payee: 'Employer',
+			kind: 'salary',
+			cadence: 'monthly',
+			expectedAmountCents: 250000,
+			nextDate: '2026-07-25'
 		});
 		await insertRecurringPayment({
 			id: 'recurring-weekly',
@@ -430,12 +433,15 @@ async function seedCashflow() {
 		amountCents: 1000,
 		dueDate: '2026-08-01'
 	});
-	await createPlannedIncome(db, {
+	await createContract(db, {
 		accountId: account.id,
 		categoryId: 'cat-salary',
-		payer: 'Employer',
-		amountCents: 250000,
-		dueDate: '2026-07-25'
+		name: 'Salary',
+		payee: 'Employer',
+		kind: 'salary',
+		cadence: 'monthly',
+		expectedAmountCents: 250000,
+		nextDate: '2026-07-25'
 	});
 	await createContract(db, {
 		accountId: account.id,

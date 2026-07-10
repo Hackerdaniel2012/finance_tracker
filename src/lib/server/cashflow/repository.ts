@@ -163,7 +163,7 @@ async function getContractIncome(db: DbClient, window: CashflowWindow): Promise<
 }
 
 async function getNextIncome(db: DbClient, window: CashflowWindow): Promise<UpcomingIncome | null> {
-	const [nextIncome] = await getUpcomingIncome(db, window);
+	const [nextIncome] = await getContractIncome(db, window);
 	return nextIncome ?? null;
 }
 

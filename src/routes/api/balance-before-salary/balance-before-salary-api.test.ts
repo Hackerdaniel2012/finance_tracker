@@ -7,6 +7,7 @@ import {
 	createTestDbClient
 } from '../../../../tests/db/test-database';
 import { createAccount } from '$lib/server/accounts/repository';
+import { createContract } from '$lib/server/contracts/repository';
 import type { DbClient } from '$lib/server/db-client';
 import { createPlannedIncome, createPlannedPayment } from '$lib/server/planned-cashflow/repository';
 import { GET } from './+server';
@@ -21,7 +22,7 @@ beforeEach(async () => {
 });
 
 describe('/api/balance-before-salary', () => {
-	it('returns projected balance before the next planned income', async () => {
+	it('returns projected balance before the next confirmed salary contract', async () => {
 		const account = await createAccount(db, { name: 'Main Giro', currentBalanceCents: 150000 });
 		await createPlannedPayment(db, {
 			accountId: account.id,
@@ -29,11 +30,15 @@ describe('/api/balance-before-salary', () => {
 			amountCents: 80000,
 			dueDate: '2026-07-20'
 		});
-		await createPlannedIncome(db, {
+		await createContract(db, {
 			accountId: account.id,
-			payer: 'Employer',
-			amountCents: 250000,
-			dueDate: '2026-07-25'
+			name: 'Salary',
+			kind: 'salary',
+			cadence: 'monthly',
+			expectedAmountCents: 250000,
+			nextDate: '2026-07-25',
+			payee: 'Employer',
+			status: 'active'
 		});
 
 		const response = await GET(event('http://localhost/api/balance-before-salary?asOf=2026-07-08'));
@@ -72,11 +77,15 @@ describe('/api/balance-before-salary', () => {
 			amountCents: 80000,
 			dueDate: '2026-07-20'
 		});
-		await createPlannedIncome(db, {
+		await createContract(db, {
 			accountId: account.id,
-			payer: 'Employer',
-			amountCents: 250000,
-			dueDate: '2026-07-25'
+			name: 'Salary',
+			kind: 'salary',
+			cadence: 'monthly',
+			expectedAmountCents: 250000,
+			nextDate: '2026-07-25',
+			payee: 'Employer',
+			status: 'active'
 		});
 
 		const response = await GET(
@@ -91,6 +100,26 @@ describe('/api/balance-before-salary', () => {
 				upcomingPaymentCents: 10000,
 				projectedBalanceCents: 140000,
 				nextIncome: { payer: 'Employer' }
+			}
+		});
+	});
+
+	it('does not infer a salary date from planned one-off income', async () => {
+		const account = await createAccount(db, { name: 'Main Giro', currentBalanceCents: 150000 });
+		await createPlannedIncome(db, {
+			accountId: account.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+
+		const response = await GET(event('http://localhost/api/balance-before-salary?asOf=2026-07-08'));
+
+		await expect(response.json()).resolves.toMatchObject({
+			projection: {
+				projectionDate: '2026-07-31',
+				nextIncome: null,
+				currentBalanceCents: 150000
 			}
 		});
 	});
