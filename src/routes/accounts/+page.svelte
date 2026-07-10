@@ -33,6 +33,7 @@
 	let profileBankId = $state<BankId>('dkb');
 	let profileLabel = $state('');
 	let isSaving = $state(false);
+	let deletingAccountId = $state<string | null>(null);
 
 	async function createAccount(event: SubmitEvent) {
 		event.preventDefault();
@@ -96,6 +97,29 @@
 		profileAccountId = profileAccountId || accounts[0]?.id || '';
 	}
 
+	async function deleteAccount(account: AccountWithProfile) {
+		if (!confirm(m.delete_account_confirm({ name: account.name }))) {
+			return;
+		}
+
+		deletingAccountId = account.id;
+		error = null;
+
+		try {
+			await fetchJson(`/api/accounts/${account.id}`, {
+				method: 'DELETE'
+			});
+
+			status = m.account_deleted();
+			await loadAccounts();
+		} catch {
+			status = m.setup_status_error();
+			error = m.setup_status_error();
+		} finally {
+			deletingAccountId = null;
+		}
+	}
+
 	async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
 		const response = await fetch(url, init);
 		if (!response.ok) {
@@ -154,12 +178,22 @@
 									: m.no_profile()}
 							</p>
 						</div>
-						<a
-							class="rounded border border-zinc-300 px-3 py-2 text-center text-sm font-medium text-zinc-950"
-							href={resolve(`/accounts/${account.id}`)}
-						>
-							{m.view_account()}
-						</a>
+						<div class="flex flex-wrap items-center gap-2">
+							<a
+								class="rounded border border-zinc-300 px-3 py-2 text-center text-sm font-medium text-zinc-950"
+								href={resolve(`/accounts/${account.id}`)}
+							>
+								{m.view_account()}
+							</a>
+							<button
+								class="rounded border border-red-200 px-3 py-2 text-sm font-medium text-red-700 disabled:opacity-50"
+								type="button"
+								disabled={deletingAccountId === account.id}
+								onclick={() => deleteAccount(account)}
+							>
+								{m.delete_account()}
+							</button>
+						</div>
 					</article>
 				{/each}
 			{/if}
