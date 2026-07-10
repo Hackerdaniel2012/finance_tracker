@@ -8,7 +8,7 @@ import {
 } from '../../../../tests/db/test-database';
 import type { DbClient } from '$lib/server/db-client';
 import { createAccount } from '$lib/server/accounts/repository';
-import { GET, PATCH, POST } from './+server';
+import { DELETE, GET, PATCH, POST } from './+server';
 
 let db: DbClient;
 
@@ -44,6 +44,28 @@ describe('/api/accounts', () => {
 		await expect(patchResponse.json()).resolves.toMatchObject({
 			account: { id: created.account.id, name: 'Household Giro' }
 		});
+	});
+
+	it('deletes accounts and their linked data', async () => {
+		const account = await createAccount(db, { name: 'Disposable DKB' });
+		await db
+			.prepare('INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES (?, ?, ?, ?)')
+			.bind('profile-to-delete', account.id, 'dkb', 'Disposable DKB')
+			.run();
+
+		const response = await DELETE(event({ id: account.id }));
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({ ok: true });
+		expect(
+			await db.prepare('SELECT id FROM accounts WHERE id = ?').bind(account.id).first()
+		).toBeNull();
+		expect(
+			await db
+				.prepare('SELECT id FROM import_profiles WHERE account_id = ?')
+				.bind(account.id)
+				.first()
+		).toBeNull();
 	});
 
 	it('returns validation and not found errors', async () => {
@@ -84,7 +106,10 @@ function event(body?: unknown) {
 		request: {
 			json: async () => body
 		}
-	} as Parameters<typeof GET>[0] & Parameters<typeof POST>[0] & Parameters<typeof PATCH>[0];
+	} as Parameters<typeof GET>[0] &
+		Parameters<typeof POST>[0] &
+		Parameters<typeof PATCH>[0] &
+		Parameters<typeof DELETE>[0];
 }
 
 function eventWithMalformedJson() {

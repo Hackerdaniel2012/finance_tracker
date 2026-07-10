@@ -52,6 +52,10 @@ export function parseUpdateAccountInput(value: unknown): UpdateAccountInput {
 	return input;
 }
 
+export function parseDeleteAccountInput(value: unknown): { id: string } {
+	return { id: requiredString(asObject(value).id, 'id') };
+}
+
 export function parseCreateProfileInput(value: unknown): CreateProfileInput {
 	const body = asObject(value);
 	const bankId = requiredString(body.bankId, 'bankId');

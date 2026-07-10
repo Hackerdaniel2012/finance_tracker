@@ -1,7 +1,16 @@
 import { json } from '@sveltejs/kit';
 import { jsonError, getRequestDatabase, readJson } from '$lib/server/api';
-import { createAccount, listAccounts, updateAccount } from '$lib/server/accounts/repository';
-import { parseCreateAccountInput, parseUpdateAccountInput } from '$lib/server/accounts/validation';
+import {
+	createAccount,
+	deleteAccount,
+	listAccounts,
+	updateAccount
+} from '$lib/server/accounts/repository';
+import {
+	parseCreateAccountInput,
+	parseDeleteAccountInput,
+	parseUpdateAccountInput
+} from '$lib/server/accounts/validation';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async (event) => {
@@ -31,6 +40,17 @@ export const PATCH: RequestHandler = async (event) => {
 		);
 
 		return json({ account });
+	} catch (error) {
+		return jsonError(error);
+	}
+};
+
+export const DELETE: RequestHandler = async (event) => {
+	try {
+		const input = parseDeleteAccountInput(await readJson(event.request));
+		await deleteAccount(getRequestDatabase(event), input.id);
+
+		return json({ ok: true });
 	} catch (error) {
 		return jsonError(error);
 	}

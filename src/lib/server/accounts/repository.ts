@@ -104,6 +104,14 @@ export async function updateAccount(db: DbClient, input: UpdateAccountInput): Pr
 	return updated;
 }
 
+export async function deleteAccount(db: DbClient, id: string): Promise<void> {
+	if (!(await getAccount(db, id))) {
+		throw new NotFoundError('Account not found');
+	}
+
+	await db.prepare('DELETE FROM accounts WHERE id = ?').bind(id).run();
+}
+
 export async function listProfiles(db: DbClient): Promise<ImportProfile[]> {
 	const { results } = await db
 		.prepare(
