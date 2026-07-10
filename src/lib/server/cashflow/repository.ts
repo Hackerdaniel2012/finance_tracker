@@ -15,6 +15,7 @@ export async function getMonthCashflowReport(
 ): Promise<MonthCashflowReport> {
 	const from = startOfMonth(window.asOf);
 	const accountClause = window.accountId ? 'AND account_id = ?' : '';
+	const subaccountClause = window.subaccount ? 'AND subaccount = ?' : '';
 	const [actualRow, upcomingPayments, upcomingIncome] = await Promise.all([
 		db
 			.prepare(
@@ -23,9 +24,14 @@ export async function getMonthCashflowReport(
 					COALESCE(SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END), 0) AS expense_cents,
 					COALESCE(SUM(amount_cents), 0) AS net_cents
 				FROM transactions
-				WHERE booking_date BETWEEN ? AND ? ${accountClause}`
+				WHERE booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}`
 			)
-			.bind(from, window.asOf, ...(window.accountId ? [window.accountId] : []))
+			.bind(
+				from,
+				window.asOf,
+				...(window.accountId ? [window.accountId] : []),
+				...(window.subaccount ? [window.subaccount] : [])
+			)
 			.first<MonthActualRow>(),
 		getUpcomingPayments(db, window),
 		getUpcomingIncome(db, window)
@@ -84,7 +90,7 @@ export async function getBalanceBeforeSalaryProjection(
 ): Promise<BalanceBeforeSalaryProjection> {
 	const [nextIncome, accountBalances] = await Promise.all([
 		getNextIncome(db, window),
-		getAccountBalances(db, window.asOf, window.accountId)
+		getAccountBalances(db, window.asOf, window.accountId, window.subaccount)
 	]);
 	const salaryDate = window.nextSalaryDate ?? nextIncome?.dueDate ?? null;
 	const projectionDate = salaryDate ? previousDate(salaryDate) : window.monthEnd;
@@ -234,9 +240,11 @@ async function getPaymentsThroughDate(
 async function getAccountBalances(
 	db: DbClient,
 	asOf: string,
-	accountId?: string
+	accountId?: string,
+	subaccount?: string
 ): Promise<AccountBalanceRow[]> {
 	const accountFilter = accountId ? 'WHERE account_id = ?' : '';
+	const subaccountClause = subaccount ? 'AND t.subaccount = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT
@@ -247,27 +255,27 @@ async function getAccountBalances(
 				SELECT
 					a.id AS account_id,
 					a.name AS account_name,
-					a.current_balance_cents AS balance_cents,
+					CASE
+						WHEN ? IS NOT NULL THEN a.opening_balance_cents + COALESCE(SUM(t.amount_cents), 0)
+						WHEN a.current_balance_cents IS NOT NULL THEN a.current_balance_cents
+						ELSE a.opening_balance_cents + COALESCE(SUM(t.amount_cents), 0)
+					END AS balance_cents,
 					a.display_order,
-					a.created_at
+					a.created_at,
+					MIN(a.rowid) AS row_id
 				FROM accounts a
-				WHERE a.current_balance_cents IS NOT NULL
-				UNION ALL
-				SELECT
-					a.id AS account_id,
-					a.name AS account_name,
-					a.opening_balance_cents + COALESCE(SUM(t.amount_cents), 0) AS balance_cents,
-					a.display_order,
-					a.created_at
-				FROM accounts a
-				LEFT JOIN transactions t ON t.account_id = a.id AND t.booking_date <= ?
-				WHERE a.current_balance_cents IS NULL
-				GROUP BY a.id, a.name, a.opening_balance_cents, a.display_order, a.created_at
+				LEFT JOIN transactions t ON t.account_id = a.id AND t.booking_date <= ? ${subaccountClause}
+				GROUP BY a.id, a.name, a.opening_balance_cents, a.current_balance_cents, a.display_order, a.created_at
 			)
 			${accountFilter}
-			ORDER BY display_order ASC, created_at ASC`
+			ORDER BY display_order ASC, created_at ASC, row_id ASC`
 		)
-		.bind(asOf, ...(accountId ? [accountId] : []))
+		.bind(
+			subaccount ?? null,
+			asOf,
+			...(subaccount ? [subaccount] : []),
+			...(accountId ? [accountId] : [])
+		)
 		.all<AccountBalanceRow>();
 
 	return results;

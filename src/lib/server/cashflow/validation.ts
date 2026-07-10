@@ -8,6 +8,7 @@ export function parseCashflowWindow(url: URL, today = new Date()): CashflowWindo
 	const nextSalaryDate =
 		optionalDate(url.searchParams.get('nextSalaryDate'), 'nextSalaryDate') ?? null;
 	const accountId = optionalQueryString(url, 'accountId');
+	const subaccount = optionalQueryString(url, 'subaccount');
 
 	if (nextSalaryDate !== null && nextSalaryDate <= asOf) {
 		throw new ValidationError('nextSalaryDate must be after asOf');
@@ -17,7 +18,8 @@ export function parseCashflowWindow(url: URL, today = new Date()): CashflowWindo
 		asOf,
 		monthEnd: endOfMonth(asOf),
 		nextSalaryDate,
-		accountId
+		accountId,
+		subaccount
 	};
 }
 

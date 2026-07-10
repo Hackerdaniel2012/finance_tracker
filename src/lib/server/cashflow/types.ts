@@ -7,6 +7,7 @@ export interface CashflowWindow {
 	monthEnd: string;
 	nextSalaryDate: string | null;
 	accountId?: string;
+	subaccount?: string;
 }
 
 export interface BalanceBeforeSalaryProjection {

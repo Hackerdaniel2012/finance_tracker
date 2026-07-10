@@ -5,10 +5,12 @@ export interface ReportDateRange {
 
 export interface SummaryReportOptions {
 	accountId?: string;
+	subaccount?: string;
 }
 
 export interface NetWorthReportOptions {
 	accountId?: string;
+	subaccount?: string;
 }
 
 export interface AccountBalanceHistoryReport {

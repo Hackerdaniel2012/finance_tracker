@@ -1,5 +1,5 @@
 import { ValidationError } from '../accounts/errors';
-import type { NetWorthReportOptions, ReportDateRange } from './types';
+import type { NetWorthReportOptions, ReportDateRange, SummaryReportOptions } from './types';
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -17,7 +17,15 @@ export function parseReportDateRange(url: URL, today = new Date()): ReportDateRa
 
 export function parseNetWorthReportOptions(url: URL): NetWorthReportOptions {
 	return {
-		accountId: optionalQueryString(url, 'accountId')
+		accountId: optionalQueryString(url, 'accountId'),
+		subaccount: optionalQueryString(url, 'subaccount')
+	};
+}
+
+export function parseSummaryReportOptions(url: URL): SummaryReportOptions {
+	return {
+		accountId: optionalQueryString(url, 'accountId'),
+		subaccount: optionalQueryString(url, 'subaccount')
 	};
 }
 
