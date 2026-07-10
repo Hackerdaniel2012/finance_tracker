@@ -91,6 +91,7 @@
 	let isSavingTransaction = $state(false);
 	let isSavingCategory = $state(false);
 	let isSavingRule = $state(false);
+	let isReapplyingRules = $state(false);
 
 	const openReviewCount = $derived(unknownPagination.total);
 	const canGoToPreviousUnknownPage = $derived(unknownPagination.offset > 0);
@@ -334,6 +335,27 @@
 			error = m.review_status_error();
 		} finally {
 			isSavingRule = false;
+		}
+	}
+
+	async function reapplyRules() {
+		isReapplyingRules = true;
+		error = null;
+
+		try {
+			const { result } = await fetchJson<{ result: { matchedCount: number; unmatchedCount: number } }>(
+				'/api/category-rules/apply',
+				{
+					method: 'POST'
+				}
+			);
+			status = m.rules_applied({ matched: String(result.matchedCount), unmatched: String(result.unmatchedCount) });
+			await loadReviewState();
+		} catch {
+			status = m.review_status_error();
+			error = m.review_status_error();
+		} finally {
+			isReapplyingRules = false;
 		}
 	}
 
@@ -664,13 +686,23 @@
 		<section class="rounded border border-zinc-200 bg-white shadow-sm">
 			<div class="flex items-center justify-between border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.category_rules_title()}</h2>
-				<button
-					class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
-					type="button"
-					onclick={startNewRule}
-				>
-					{m.new_rule()}
-				</button>
+				<div class="flex gap-2">
+					<button
+						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-50"
+						type="button"
+						disabled={isReapplyingRules}
+						onclick={reapplyRules}
+					>
+						{m.reapply_rules()}
+					</button>
+					<button
+						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+						type="button"
+						onclick={startNewRule}
+					>
+						{m.new_rule()}
+					</button>
+				</div>
 			</div>
 			<div class="grid gap-5 p-5 lg:grid-cols-[1fr_18rem]">
 				<div class="divide-y divide-zinc-100 rounded border border-zinc-200">

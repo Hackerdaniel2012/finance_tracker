@@ -412,6 +412,103 @@ export async function previewCategoryRule(
 	};
 }
 
+export async function reclassifyTransactions(db: DbClient): Promise<{
+	updatedCount: number;
+	matchedCount: number;
+	unmatchedCount: number;
+}> {
+	const [{ results: rules }, { results: rows }] = await Promise.all([
+		db
+			.prepare(
+				`SELECT id, category_id, field, operator, pattern, priority
+				FROM category_rules
+				ORDER BY priority ASC, created_at ASC`
+			)
+			.all<CategoryRuleRow>(),
+		db
+			.prepare(
+				`SELECT id, payee, description, note, search_text, category_id, classification_status
+				FROM transactions
+				WHERE classification_status IN ('unknown', 'auto')
+				ORDER BY booking_date DESC, id DESC`
+			)
+			.all<ReclassifyRow>()
+	]);
+
+	const sortedRules = rules.map((rule) => ({
+		categoryId: rule.category_id,
+		field: rule.field,
+		operator: rule.operator,
+		pattern: rule.pattern
+	}));
+
+	const toCategorize: { row: ReclassifyRow; newCategoryId: string }[] = [];
+	const toUncategorize: ReclassifyRow[] = [];
+
+	for (const row of rows) {
+		const match = sortedRules.find((rule) => matchesCategoryRule(mapRuleSource(row), rule));
+		const newCategoryId = match?.categoryId ?? null;
+		const isMatched = newCategoryId !== null;
+
+		if (row.category_id === newCategoryId && (isMatched || row.classification_status === 'unknown')) {
+			continue;
+		}
+
+		if (isMatched && newCategoryId) {
+			toCategorize.push({ row, newCategoryId });
+		} else {
+			toUncategorize.push(row);
+		}
+	}
+
+	for (let offset = 0; offset < toCategorize.length; offset += 200) {
+		const statements = toCategorize.slice(offset, offset + 200).flatMap(({ row, newCategoryId }) => [
+			db
+				.prepare(
+					`UPDATE transactions
+					SET category_id = ?, classification_status = 'auto', updated_at = CURRENT_TIMESTAMP
+					WHERE id = ?`
+				)
+				.bind(newCategoryId, row.id),
+			db
+				.prepare(
+					`UPDATE transaction_review_flags
+					SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
+					WHERE transaction_id = ? AND status = 'open'`
+				)
+				.bind(row.id)
+		]);
+		if (db.batch) await db.batch(statements);
+		else for (const statement of statements) await statement.run();
+	}
+
+	for (let offset = 0; offset < toUncategorize.length; offset += 200) {
+		const statements = toUncategorize.slice(offset, offset + 200).flatMap((row) => [
+			db
+				.prepare(
+					`UPDATE transactions
+					SET category_id = NULL, classification_status = 'unknown', updated_at = CURRENT_TIMESTAMP
+					WHERE id = ?`
+				)
+				.bind(row.id),
+			db
+				.prepare(
+					`INSERT OR IGNORE INTO transaction_review_flags (id, transaction_id, reason)
+					VALUES (?, ?, 'unknown_category')`
+				)
+				.bind(crypto.randomUUID(), row.id)
+		]);
+		if (db.batch) await db.batch(statements);
+		else for (const statement of statements) await statement.run();
+	}
+
+	return {
+		updatedCount: toCategorize.length + toUncategorize.length,
+		matchedCount: toCategorize.length,
+		unmatchedCount: toUncategorize.length
+	};
+}
+
 async function applyRuleToUnknownTransactions(
 	db: DbClient,
 	rule: RuleMatchDraft & { categoryId: string; excludeId: string }
@@ -454,7 +551,12 @@ async function listUnknownRuleRows(db: DbClient): Promise<RuleMatchRow[]> {
 	return results;
 }
 
-function mapRuleSource(row: RuleMatchRow) {
+function mapRuleSource(row: {
+	payee: string | null;
+	description: string | null;
+	note: string | null;
+	search_text: string;
+}) {
 	return {
 		payee: row.payee,
 		description: row.description,
@@ -563,6 +665,25 @@ interface TagOnlyRow extends DbRow {
 interface RuleSourceRow extends DbRow {
 	payee: string | null;
 	search_text: string | null;
+}
+
+interface CategoryRuleRow extends DbRow {
+	id: string;
+	category_id: string;
+	field: 'payee' | 'description' | 'note' | 'search_text';
+	operator: 'contains' | 'equals' | 'starts_with' | 'regex';
+	pattern: string;
+	priority: number;
+}
+
+interface ReclassifyRow extends DbRow {
+	id: string;
+	payee: string | null;
+	description: string | null;
+	note: string | null;
+	search_text: string;
+	category_id: string | null;
+	classification_status: TransactionClassificationStatus;
 }
 
 interface RuleMatchDraft {

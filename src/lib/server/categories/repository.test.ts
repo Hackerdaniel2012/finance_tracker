@@ -26,7 +26,7 @@ describe('category repository', () => {
 	it('lists seeded categories in sort order', async () => {
 		const categories = await listCategories(db);
 
-		expect(categories).toHaveLength(11);
+		expect(categories).toHaveLength(13);
 		expect(categories[0]).toMatchObject({
 			id: 'cat-income',
 			name: 'Income',
@@ -86,7 +86,7 @@ describe('category repository', () => {
 			isGlobal: true,
 			priority: 20
 		});
-		await expect(listCategoryRules(db)).resolves.toHaveLength(1);
+		await expect(listCategoryRules(db)).resolves.toHaveLength(14);
 
 		const updated = await updateCategoryRule(db, {
 			id: rule.id,

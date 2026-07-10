@@ -175,6 +175,8 @@
 	"sort_order": "Sortierung",
 	"save_category": "Kategorie speichern",
 	"new_rule": "Neue Regel",
+	"reapply_rules": "Regeln erneut anwenden",
+	"rules_applied": "{matched} kategorisiert, {unmatched} weiterhin unbekannt",
 	"edit_rule": "Regel bearbeiten",
 	"save_rule": "Regel speichern",
 	"no_category_rules": "Noch keine Kategorieregeln",

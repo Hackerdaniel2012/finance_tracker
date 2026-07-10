@@ -175,6 +175,8 @@
 	"sort_order": "Sort order",
 	"save_category": "Save category",
 	"new_rule": "New rule",
+	"reapply_rules": "Re-apply rules",
+	"rules_applied": "{matched} categorized, {unmatched} still unknown",
 	"edit_rule": "Edit rule",
 	"save_rule": "Save rule",
 	"no_category_rules": "No category rules yet",

@@ -16,10 +16,12 @@ beforeEach(async () => {
 });
 
 describe('/api/category-rules', () => {
-	it('lists an empty rule set', async () => {
+	it('lists seeded category rules', async () => {
 		const response = await GET(event());
+		const body = (await response.json()) as { rules: Array<{ id: string }> };
 
-		await expect(response.json()).resolves.toEqual({ rules: [] });
+		expect(body.rules).toHaveLength(13);
+		expect(body.rules[0]).toMatchObject({ id: 'rule-salary', categoryId: 'cat-salary' });
 	});
 
 	it('creates and updates rules', async () => {
