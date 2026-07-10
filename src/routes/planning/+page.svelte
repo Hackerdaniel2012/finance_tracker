@@ -168,6 +168,22 @@
 	let editContractAccountId = $state('');
 	let editContractProfileId = $state('');
 	let editContractCategoryId = $state('');
+	let editingPaymentId = $state<string | null>(null);
+	let editPaymentPayee = $state('');
+	let editPaymentAmount = $state('');
+	let editPaymentDueDate = $state(todayIso());
+	let editPaymentStatus = $state<PlannedPaymentStatus>('planned');
+	let editPaymentAccountId = $state('');
+	let editPaymentCategoryId = $state('');
+	let editPaymentNote = $state('');
+	let editingIncomeId = $state<string | null>(null);
+	let editIncomePayer = $state('');
+	let editIncomeAmount = $state('');
+	let editIncomeDueDate = $state(todayIso());
+	let editIncomeStatus = $state<PlannedIncomeStatus>('planned');
+	let editIncomeAccountId = $state('');
+	let editIncomeCategoryId = $state('');
+	let editIncomeNote = $state('');
 
 	let contractName = $state('');
 	let contractPayee = $state('');
@@ -401,6 +417,49 @@
 		await patchAndReload('/api/planned-payments', { id: payment.id, status: nextStatus });
 	}
 
+	function startPaymentEdit(payment: PlannedPayment) {
+		editingPaymentId = payment.id;
+		editPaymentPayee = payment.payee;
+		editPaymentAmount = (payment.amountCents / 100).toFixed(2);
+		editPaymentDueDate = payment.dueDate;
+		editPaymentStatus = payment.status;
+		editPaymentAccountId = payment.accountId ?? '';
+		editPaymentCategoryId = payment.categoryId ?? '';
+		editPaymentNote = payment.note ?? '';
+	}
+
+	function cancelPaymentEdit() {
+		editingPaymentId = null;
+	}
+
+	async function savePayment(event: SubmitEvent, paymentId: string) {
+		event.preventDefault();
+		error = null;
+
+		try {
+			await fetchJson<{ plannedPayment: PlannedPayment }>('/api/planned-payments', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					id: paymentId,
+					accountId: editPaymentAccountId || null,
+					categoryId: editPaymentCategoryId || null,
+					payee: editPaymentPayee,
+					amountCents: eurosToCents(editPaymentAmount),
+					dueDate: editPaymentDueDate,
+					status: editPaymentStatus,
+					note: editPaymentNote || null
+				})
+			});
+			editingPaymentId = null;
+			status = m.planning_status_saved();
+			await loadPlanningState();
+		} catch {
+			status = m.planning_status_error();
+			error = m.planning_status_error();
+		}
+	}
+
 	async function createIncome(event: SubmitEvent) {
 		event.preventDefault();
 		isSavingIncome = true;
@@ -436,6 +495,49 @@
 
 	async function updateIncomeStatus(income: PlannedIncome, nextStatus: PlannedIncomeStatus) {
 		await patchAndReload('/api/planned-income', { id: income.id, status: nextStatus });
+	}
+
+	function startIncomeEdit(income: PlannedIncome) {
+		editingIncomeId = income.id;
+		editIncomePayer = income.payer;
+		editIncomeAmount = (income.amountCents / 100).toFixed(2);
+		editIncomeDueDate = income.dueDate;
+		editIncomeStatus = income.status;
+		editIncomeAccountId = income.accountId ?? '';
+		editIncomeCategoryId = income.categoryId ?? '';
+		editIncomeNote = income.note ?? '';
+	}
+
+	function cancelIncomeEdit() {
+		editingIncomeId = null;
+	}
+
+	async function saveIncome(event: SubmitEvent, incomeId: string) {
+		event.preventDefault();
+		error = null;
+
+		try {
+			await fetchJson<{ plannedIncome: PlannedIncome }>('/api/planned-income', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					id: incomeId,
+					accountId: editIncomeAccountId || null,
+					categoryId: editIncomeCategoryId || null,
+					payer: editIncomePayer,
+					amountCents: eurosToCents(editIncomeAmount),
+					dueDate: editIncomeDueDate,
+					status: editIncomeStatus,
+					note: editIncomeNote || null
+				})
+			});
+			editingIncomeId = null;
+			status = m.planning_status_saved();
+			await loadPlanningState();
+		} catch {
+			status = m.planning_status_error();
+			error = m.planning_status_error();
+		}
 	}
 
 	async function createLiability(event: SubmitEvent) {
@@ -938,29 +1040,115 @@
 			</div>
 			<div class="divide-y divide-zinc-100">
 				{#each plannedPayments as payment (payment.id)}
-					<div class="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto]">
-						<div>
-							<p class="font-medium text-zinc-950">{payment.payee}</p>
-							<p class="mt-1 text-sm text-zinc-500">
-								{formatDate(payment.dueDate)} / {paymentStatusLabel(payment.status)}
-							</p>
-						</div>
-						<div class="text-left sm:text-right">
-							<p class="font-semibold text-zinc-950">{centsToEuros(payment.amountCents)}</p>
-							<div class="mt-2 flex flex-wrap gap-2 sm:justify-end">
-								{#each paymentStatuses as option (option)}
+					{#if editingPaymentId === payment.id}
+						<form
+							class="grid gap-4 border-b border-zinc-200 bg-zinc-50 px-5 py-4"
+							onsubmit={(event) => savePayment(event, payment.id)}
+						>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.payee()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										bind:value={editPaymentPayee}
+										required
+									/>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.amount()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										bind:value={editPaymentAmount}
+										inputmode="decimal"
+										required
+									/>
+								</label>
+							</div>
+							<div class="grid gap-4 sm:grid-cols-3">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.due_date()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										type="date"
+										bind:value={editPaymentDueDate}
+										required
+									/>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.status()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editPaymentStatus}>
+										{#each paymentStatuses as option (option)}
+											<option value={option}>{paymentStatusLabel(option)}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.account()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editPaymentAccountId}>
+										<option value="">{m.not_available()}</option>
+										{#each accounts as account (account.id)}
+											<option value={account.id}>{account.name}</option>
+										{/each}
+									</select>
+								</label>
+							</div>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.category()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editPaymentCategoryId}>
+										<option value="">{m.uncategorized()}</option>
+										{#each categories as category (category.id)}
+											<option value={category.id}>{category.name}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.notes()}</span>
+									<input class="w-full rounded border-zinc-300" bind:value={editPaymentNote} />
+								</label>
+							</div>
+							<div class="flex flex-wrap gap-2">
+								<button
+									class="rounded bg-zinc-950 px-3 py-2 text-sm font-medium text-white"
+									type="submit">{m.save_planned_payment()}</button
+								>
+								<button
+									class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+									type="button"
+									onclick={cancelPaymentEdit}>{m.cancel_edit()}</button
+								>
+							</div>
+						</form>
+					{:else}
+						<div class="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto]">
+							<div>
+								<p class="font-medium text-zinc-950">{payment.payee}</p>
+								<p class="mt-1 text-sm text-zinc-500">
+									{formatDate(payment.dueDate)} / {paymentStatusLabel(payment.status)}
+								</p>
+							</div>
+							<div class="text-left sm:text-right">
+								<p class="font-semibold text-zinc-950">{centsToEuros(payment.amountCents)}</p>
+								<div class="mt-2 flex flex-wrap gap-2 sm:justify-end">
 									<button
-										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
+										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700"
 										type="button"
-										disabled={payment.status === option}
-										onclick={() => updatePaymentStatus(payment, option)}
+										onclick={() => startPaymentEdit(payment)}>{m.edit_planned_payment()}</button
 									>
-										{paymentStatusLabel(option)}
-									</button>
-								{/each}
+									{#each paymentStatuses as option (option)}
+										<button
+											class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
+											type="button"
+											disabled={payment.status === option}
+											onclick={() => updatePaymentStatus(payment, option)}
+										>
+											{paymentStatusLabel(option)}
+										</button>
+									{/each}
+								</div>
 							</div>
 						</div>
-					</div>
+					{/if}
 				{:else}
 					<p class="p-5 text-sm text-zinc-600">{m.no_planned_payments()}</p>
 				{/each}
@@ -1039,29 +1227,115 @@
 			</div>
 			<div class="divide-y divide-zinc-100">
 				{#each plannedIncome as income (income.id)}
-					<div class="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto]">
-						<div>
-							<p class="font-medium text-zinc-950">{income.payer}</p>
-							<p class="mt-1 text-sm text-zinc-500">
-								{formatDate(income.dueDate)} / {incomeStatusLabel(income.status)}
-							</p>
-						</div>
-						<div class="text-left sm:text-right">
-							<p class="font-semibold text-emerald-700">{centsToEuros(income.amountCents)}</p>
-							<div class="mt-2 flex flex-wrap gap-2 sm:justify-end">
-								{#each incomeStatuses as option (option)}
+					{#if editingIncomeId === income.id}
+						<form
+							class="grid gap-4 border-b border-zinc-200 bg-zinc-50 px-5 py-4"
+							onsubmit={(event) => saveIncome(event, income.id)}
+						>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.payer()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										bind:value={editIncomePayer}
+										required
+									/>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.amount()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										bind:value={editIncomeAmount}
+										inputmode="decimal"
+										required
+									/>
+								</label>
+							</div>
+							<div class="grid gap-4 sm:grid-cols-3">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.due_date()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										type="date"
+										bind:value={editIncomeDueDate}
+										required
+									/>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.status()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editIncomeStatus}>
+										{#each incomeStatuses as option (option)}
+											<option value={option}>{incomeStatusLabel(option)}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.account()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editIncomeAccountId}>
+										<option value="">{m.not_available()}</option>
+										{#each accounts as account (account.id)}
+											<option value={account.id}>{account.name}</option>
+										{/each}
+									</select>
+								</label>
+							</div>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.category()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editIncomeCategoryId}>
+										<option value="">{m.uncategorized()}</option>
+										{#each categories as category (category.id)}
+											<option value={category.id}>{category.name}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.notes()}</span>
+									<input class="w-full rounded border-zinc-300" bind:value={editIncomeNote} />
+								</label>
+							</div>
+							<div class="flex flex-wrap gap-2">
+								<button
+									class="rounded bg-zinc-950 px-3 py-2 text-sm font-medium text-white"
+									type="submit">{m.save_planned_income()}</button
+								>
+								<button
+									class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+									type="button"
+									onclick={cancelIncomeEdit}>{m.cancel_edit()}</button
+								>
+							</div>
+						</form>
+					{:else}
+						<div class="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto]">
+							<div>
+								<p class="font-medium text-zinc-950">{income.payer}</p>
+								<p class="mt-1 text-sm text-zinc-500">
+									{formatDate(income.dueDate)} / {incomeStatusLabel(income.status)}
+								</p>
+							</div>
+							<div class="text-left sm:text-right">
+								<p class="font-semibold text-emerald-700">{centsToEuros(income.amountCents)}</p>
+								<div class="mt-2 flex flex-wrap gap-2 sm:justify-end">
 									<button
-										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
+										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700"
 										type="button"
-										disabled={income.status === option}
-										onclick={() => updateIncomeStatus(income, option)}
+										onclick={() => startIncomeEdit(income)}>{m.edit_planned_income()}</button
 									>
-										{incomeStatusLabel(option)}
-									</button>
-								{/each}
+									{#each incomeStatuses as option (option)}
+										<button
+											class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
+											type="button"
+											disabled={income.status === option}
+											onclick={() => updateIncomeStatus(income, option)}
+										>
+											{incomeStatusLabel(option)}
+										</button>
+									{/each}
+								</div>
 							</div>
 						</div>
-					</div>
+					{/if}
 				{:else}
 					<p class="p-5 text-sm text-zinc-600">{m.no_planned_income()}</p>
 				{/each}
