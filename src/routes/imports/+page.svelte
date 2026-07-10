@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { onMount } from 'svelte';
 
 	type BankId = 'n26' | 'trade_republic' | 'dkb';
@@ -195,12 +196,7 @@
 	}
 
 	async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-		const response = await fetch(url, init);
-		if (!response.ok) {
-			throw new Error(await response.text());
-		}
-
-		return (await response.json()) as T;
+		return fetchJsonWithRetry<T>(url, init);
 	}
 
 	function centsToEuros(value: number): string {
