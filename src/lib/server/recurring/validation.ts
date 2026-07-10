@@ -30,6 +30,7 @@ export function parseUpdateRecurringGroupInput(
 	if ('profileId' in body) input.profileId = optionalNullableString(body.profileId, 'profileId');
 	if ('categoryId' in body)
 		input.categoryId = optionalNullableString(body.categoryId, 'categoryId');
+	if ('label' in body) input.label = optionalNullableString(body.label, 'label');
 	if ('payee' in body) input.payee = requiredString(body.payee, 'payee');
 	if ('direction' in body) input.direction = requiredDirection(body.direction);
 	if ('cadence' in body) input.cadence = requiredCadence(body.cadence);

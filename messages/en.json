@@ -237,6 +237,7 @@
 	"due_date": "Due date",
 	"payer": "Payer",
 	"recurring_title": "Recurring suggestions",
+	"label": "Label",
 	"confirm_recurring": "Confirm",
 	"ignore_recurring": "Ignore",
 	"no_recurring_groups": "No recurring suggestions yet",

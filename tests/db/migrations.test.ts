@@ -7,6 +7,7 @@ const initialMigrationPath = resolve('migrations/0001_initial_schema.sql');
 const seedCategoriesMigrationPath = resolve('migrations/0002_seed_default_categories.sql');
 const subaccountMigrationPath = resolve('migrations/0003_add_transaction_subaccount.sql');
 const recurringV2MigrationPath = resolve('migrations/0004_recurring_detector_v2.sql');
+const recurringLabelsMigrationPath = resolve('migrations/0006_add_recurring_labels.sql');
 
 const expectedTables = [
 	'account_balance_snapshots',
@@ -29,6 +30,20 @@ const expectedTables = [
 ];
 
 describe('D1 migrations', () => {
+	it('adds nullable labels to recurring groups', async () => {
+		const db = await createTestDatabase();
+		applySql(db, await readFile(initialMigrationPath, 'utf8'));
+		applySql(db, await readFile(recurringLabelsMigrationPath, 'utf8'));
+
+		db.run(
+			"INSERT INTO recurring_groups (id, payee, cadence, expected_amount_cents) VALUES ('group-1', 'Rent', 'monthly', 100000)"
+		);
+		db.run("UPDATE recurring_groups SET label = 'Home rent' WHERE id = 'group-1'");
+
+		expect(firstValue<string>(db, "SELECT label FROM recurring_groups WHERE id = 'group-1'")).toBe(
+			'Home rent'
+		);
+	});
 	it('applies the initial schema with every V1 table', async () => {
 		const db = await createTestDatabase();
 		const migration = await readFile(initialMigrationPath, 'utf8');

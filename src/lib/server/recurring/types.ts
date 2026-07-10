@@ -25,6 +25,7 @@ export interface RecurringGroup {
 	profileLabel: string | null;
 	categoryId: string | null;
 	categoryName: string | null;
+	label: string | null;
 	payee: string;
 	direction: RecurringDirection | null;
 	canonicalPayeeKey: string;
@@ -48,6 +49,7 @@ export interface UpdateRecurringGroupInput {
 	accountId?: string | null;
 	profileId?: string | null;
 	categoryId?: string | null;
+	label?: string | null;
 	payee?: string;
 	direction?: RecurringDirection;
 	cadence?: RecurringCadence;

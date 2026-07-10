@@ -237,6 +237,7 @@
 	"due_date": "Faelligkeit",
 	"payer": "Zahler",
 	"recurring_title": "Wiederholungsvorschlaege",
+	"label": "Bezeichnung",
 	"confirm_recurring": "Bestaetigen",
 	"ignore_recurring": "Ignorieren",
 	"no_recurring_groups": "Noch keine Wiederholungsvorschlaege",

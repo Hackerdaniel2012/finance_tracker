@@ -57,6 +57,7 @@
 		accountName: string | null;
 		categoryId: string | null;
 		categoryName: string | null;
+		label: string | null;
 		payee: string;
 		amountCents: number;
 		dueDate: string;
@@ -93,6 +94,7 @@
 		accountName: string | null;
 		categoryId: string | null;
 		categoryName: string | null;
+		label: string | null;
 		payee: string;
 		direction: 'incoming' | 'outgoing' | null;
 		cadence: ContractCadence;
@@ -160,6 +162,7 @@
 	let selectedRecurring = $state<RecurringGroup | null>(null);
 	let recurringDirection = $state<'incoming' | 'outgoing'>('outgoing');
 	let recurringCategoryId = $state('');
+	let recurringLabel = $state('');
 	let recurringCadence = $state<ContractCadence>('monthly');
 	let recurringAmount = $state('');
 	let recurringNextDate = $state(todayIso());
@@ -648,6 +651,7 @@
 		selectedRecurring = group;
 		recurringDirection = group.direction ?? 'outgoing';
 		recurringCategoryId = group.categoryId ?? '';
+		recurringLabel = group.label ?? '';
 		recurringCadence = group.cadence;
 		recurringAmount = String(group.expectedAmountCents / 100);
 		recurringNextDate = group.nextDate ?? todayIso();
@@ -665,6 +669,7 @@
 					status: 'confirmed',
 					direction: recurringDirection,
 					categoryId: recurringCategoryId,
+					label: recurringLabel || null,
 					cadence: recurringCadence,
 					expectedAmountCents: eurosToCents(recurringAmount),
 					nextDate: recurringNextDate
@@ -1633,6 +1638,9 @@
 						<label class="grid gap-1 text-sm"
 							><span>{m.amount()}</span><input bind:value={recurringAmount} required /></label
 						>
+						<label class="grid gap-1 text-sm sm:col-span-2 lg:col-span-5"
+							><span>{m.label()}</span><input bind:value={recurringLabel} /></label
+						>
 						<label class="grid gap-1 text-sm"
 							><span>{m.next_date()}</span><input
 								type="date"
@@ -1667,7 +1675,8 @@
 				{#each recurringGroups as group (group.id)}
 					<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
 						<div>
-							<p class="font-medium text-zinc-950">{group.payee}</p>
+							<p class="font-medium text-zinc-950">{group.label || group.payee}</p>
+							{#if group.label}<p class="text-sm text-zinc-500">{group.payee}</p>{/if}
 							<p class="mt-1 text-sm text-zinc-500">
 								{cadenceLabel(group.cadence)} / {formatDate(group.nextDate)} / {group.confidence}%
 							</p>

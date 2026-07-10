@@ -118,10 +118,11 @@ export async function updateRecurringGroup(
 	}
 
 	const payee = input.payee ?? existing.payee;
+	const label = input.label === undefined ? existing.label : input.label;
 	await db
 		.prepare(
 			`UPDATE recurring_groups
-			SET account_id = ?, profile_id = ?, category_id = ?, payee = ?, direction = ?,
+			SET account_id = ?, profile_id = ?, category_id = ?, label = ?, payee = ?, direction = ?,
 				canonical_payee_key = ?, cadence = ?, expected_amount_cents = ?, next_date = ?,
 				status = ?, confidence = ?, source = ?, needs_review = ?, detector_version = ?,
 				updated_at = CURRENT_TIMESTAMP
@@ -131,6 +132,7 @@ export async function updateRecurringGroup(
 			input.accountId === undefined ? existing.accountId : input.accountId,
 			input.profileId === undefined ? existing.profileId : input.profileId,
 			categoryId,
+			label,
 			payee,
 			direction,
 			canonicalizePayee(payee),
@@ -394,7 +396,7 @@ async function listRecurringEvidence(
 
 function recurringGroupSelect(): string {
 	return `SELECT rg.id, rg.account_id, a.name AS account_name, rg.profile_id,
-		p.label AS profile_label, rg.category_id, c.name AS category_name, rg.payee,
+		p.label AS profile_label, rg.category_id, c.name AS category_name, rg.label, rg.payee,
 		rg.direction, rg.canonical_payee_key, rg.cadence, rg.expected_amount_cents,
 		rg.next_date, rg.status, rg.confidence, rg.source, rg.needs_review,
 		rg.detector_version,
@@ -546,6 +548,7 @@ function mapRecurringGroup(row: RecurringGroupRow, evidence: RecurringEvidence[]
 		profileLabel: row.profile_label,
 		categoryId: row.category_id,
 		categoryName: row.category_name,
+		label: row.label,
 		payee: row.payee,
 		direction: row.direction,
 		canonicalPayeeKey: row.canonical_payee_key,
@@ -584,6 +587,7 @@ interface RecurringGroupRow extends DbRow {
 	profile_label: string | null;
 	category_id: string | null;
 	category_name: string | null;
+	label: string | null;
 	payee: string;
 	direction: RecurringDirection | null;
 	canonical_payee_key: string;
