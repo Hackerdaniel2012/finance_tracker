@@ -156,6 +156,18 @@
 	let isSavingIncome = $state(false);
 	let isSavingLiability = $state(false);
 	let isUpdatingRecurring = $state(false);
+	let editingContractId = $state<string | null>(null);
+	let editContractName = $state('');
+	let editContractPayee = $state('');
+	let editContractKind = $state<ContractKind>('fixed_cost');
+	let editContractCadence = $state<ContractCadence>('monthly');
+	let editContractAmount = $state('');
+	let editContractNextDate = $state(todayIso());
+	let editContractEndDate = $state('');
+	let editContractStatus = $state<ContractStatus>('active');
+	let editContractAccountId = $state('');
+	let editContractProfileId = $state('');
+	let editContractCategoryId = $state('');
 
 	let contractName = $state('');
 	let contractPayee = $state('');
@@ -299,6 +311,57 @@
 
 	async function updateContractStatus(contract: Contract, nextStatus: ContractStatus) {
 		await patchAndReload('/api/contracts', { id: contract.id, status: nextStatus });
+	}
+
+	function startContractEdit(contract: Contract) {
+		editingContractId = contract.id;
+		editContractName = contract.name;
+		editContractPayee = contract.payee ?? '';
+		editContractKind = contract.kind;
+		editContractCadence = contract.cadence;
+		editContractAmount = (contract.expectedAmountCents / 100).toFixed(2);
+		editContractNextDate = contract.nextDate;
+		editContractEndDate = contract.endDate ?? '';
+		editContractStatus = contract.status;
+		editContractAccountId = contract.accountId ?? '';
+		editContractProfileId = contract.profileId ?? '';
+		editContractCategoryId = contract.categoryId ?? '';
+	}
+
+	function cancelContractEdit() {
+		editingContractId = null;
+	}
+
+	async function saveContract(event: SubmitEvent, contractId: string) {
+		event.preventDefault();
+		error = null;
+
+		try {
+			await fetchJson<{ contract: Contract }>('/api/contracts', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					id: contractId,
+					accountId: editContractAccountId || null,
+					profileId: editContractProfileId || null,
+					categoryId: editContractCategoryId || null,
+					name: editContractName,
+					payee: editContractPayee || null,
+					kind: editContractKind,
+					cadence: editContractCadence,
+					expectedAmountCents: eurosToCents(editContractAmount),
+					nextDate: editContractNextDate,
+					endDate: editContractEndDate || null,
+					status: editContractStatus
+				})
+			});
+			editingContractId = null;
+			status = m.planning_status_saved();
+			await loadPlanningState();
+		} catch {
+			status = m.planning_status_error();
+			error = m.planning_status_error();
+		}
 	}
 
 	async function createPayment(event: SubmitEvent) {
@@ -606,37 +669,161 @@
 			</div>
 			<div class="divide-y divide-zinc-100">
 				{#each contracts as contract (contract.id)}
-					<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
-						<div>
-							<p class="font-medium text-zinc-950">{contract.name}</p>
-							<p class="mt-1 text-sm text-zinc-500">
-								{kindLabel(contract.kind)} / {cadenceLabel(contract.cadence)} / {formatDate(
-									contract.nextDate
-								)}
-							</p>
-							<p class="mt-1 text-xs text-zinc-500">
-								{contract.accountName ?? m.not_available()} / {contract.categoryName ??
-									m.uncategorized()}
-							</p>
-						</div>
-						<div class="text-left lg:text-right">
-							<p class="font-semibold text-zinc-950">
-								{centsToEuros(contract.expectedAmountCents)}
-							</p>
-							<div class="mt-2 flex flex-wrap gap-2 lg:justify-end">
-								{#each contractStatuses as option (option)}
-									<button
-										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
-										type="button"
-										disabled={contract.status === option}
-										onclick={() => updateContractStatus(contract, option)}
+					{#if editingContractId === contract.id}
+						<form
+							class="grid gap-4 border-b border-zinc-200 bg-zinc-50 px-5 py-4"
+							onsubmit={(event) => saveContract(event, contract.id)}
+						>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.contract_name()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										bind:value={editContractName}
+										required
+									/>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.payee()}</span>
+									<input class="w-full rounded border-zinc-300" bind:value={editContractPayee} />
+								</label>
+							</div>
+							<div class="grid gap-4 sm:grid-cols-4">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.contract_kind()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editContractKind}>
+										{#each contractKinds as option (option)}
+											<option value={option}>{kindLabel(option)}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.cadence()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editContractCadence}>
+										{#each cadences as option (option)}
+											<option value={option}>{cadenceLabel(option)}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.amount()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										bind:value={editContractAmount}
+										inputmode="decimal"
+										required
+									/>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.status()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editContractStatus}>
+										{#each contractStatuses as option (option)}
+											<option value={option}>{contractStatusLabel(option)}</option>
+										{/each}
+									</select>
+								</label>
+							</div>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.next_date()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										type="date"
+										bind:value={editContractNextDate}
+										required
+									/>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.end_date()}</span>
+									<input
+										class="w-full rounded border-zinc-300"
+										type="date"
+										bind:value={editContractEndDate}
+									/>
+								</label>
+							</div>
+							<div class="grid gap-4 sm:grid-cols-3">
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.account()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editContractAccountId}>
+										<option value="">{m.not_available()}</option>
+										{#each accounts as account (account.id)}
+											<option value={account.id}>{account.name}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.category()}</span>
+									<select
+										class="w-full rounded border-zinc-300"
+										bind:value={editContractCategoryId}
 									>
-										{contractStatusLabel(option)}
-									</button>
-								{/each}
+										<option value="">{m.uncategorized()}</option>
+										{#each categories as category (category.id)}
+											<option value={category.id}>{category.name}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="grid gap-1 text-sm font-medium text-zinc-700">
+									<span>{m.profile_title()}</span>
+									<select class="w-full rounded border-zinc-300" bind:value={editContractProfileId}>
+										<option value="">{m.not_available()}</option>
+										{#each profiles as profile (profile.id)}
+											<option value={profile.id}>{profile.label}</option>
+										{/each}
+									</select>
+								</label>
+							</div>
+							<div class="flex flex-wrap gap-2">
+								<button
+									class="rounded bg-zinc-950 px-3 py-2 text-sm font-medium text-white"
+									type="submit">{m.save_contract()}</button
+								>
+								<button
+									class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+									type="button"
+									onclick={cancelContractEdit}>{m.cancel_edit()}</button
+								>
+							</div>
+						</form>
+					{:else}
+						<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
+							<div>
+								<p class="font-medium text-zinc-950">{contract.name}</p>
+								<p class="mt-1 text-sm text-zinc-500">
+									{kindLabel(contract.kind)} / {cadenceLabel(contract.cadence)} / {formatDate(
+										contract.nextDate
+									)}
+								</p>
+								<p class="mt-1 text-xs text-zinc-500">
+									{contract.accountName ?? m.not_available()} / {contract.categoryName ??
+										m.uncategorized()}
+								</p>
+							</div>
+							<div class="text-left lg:text-right">
+								<p class="font-semibold text-zinc-950">
+									{centsToEuros(contract.expectedAmountCents)}
+								</p>
+								<div class="mt-2 flex flex-wrap gap-2 lg:justify-end">
+									<button
+										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700"
+										type="button"
+										onclick={() => startContractEdit(contract)}>{m.edit_contract()}</button
+									>
+									{#each contractStatuses as option (option)}
+										<button
+											class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
+											type="button"
+											disabled={contract.status === option}
+											onclick={() => updateContractStatus(contract, option)}
+										>
+											{contractStatusLabel(option)}
+										</button>
+									{/each}
+								</div>
 							</div>
 						</div>
-					</div>
+					{/if}
 				{:else}
 					<p class="p-5 text-sm text-zinc-600">{m.no_contracts()}</p>
 				{/each}
