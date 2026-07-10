@@ -73,6 +73,9 @@ export function parseUpdateTransactionInput(id: string, value: unknown): UpdateT
 	if ('createRule' in body) {
 		input.createRule = requiredBoolean(body.createRule, 'createRule');
 	}
+	if ('applyRuleToExisting' in body) {
+		input.applyRuleToExisting = requiredBoolean(body.applyRuleToExisting, 'applyRuleToExisting');
+	}
 
 	if ('ruleName' in body) {
 		input.ruleName = requiredString(body.ruleName, 'ruleName');

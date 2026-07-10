@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { onMount } from 'svelte';
 
 	type CategoryType = 'income' | 'expense' | 'transfer' | 'investment' | 'unknown';
@@ -66,7 +67,12 @@
 	let transactionCategoryId = $state('');
 	let transactionNote = $state('');
 	let transactionTags = $state('');
-	let transactionCreateRule = $state(true);
+	let transactionCreateRule = $state(false);
+	let transactionApplyRuleToExisting = $state(false);
+	let transactionRulePreview = $state<{
+		matchCount: number;
+		sample: Array<{ id: string; payee: string | null; amountCents: number }>;
+	} | null>(null);
 	let transactionRuleName = $state('');
 	let categoryName = $state('');
 	let categoryType = $state<CategoryType>('expense');
@@ -118,7 +124,6 @@
 			unknownTransactions = unknownPayload.transactions;
 			unknownPagination = unknownPayload.pagination;
 			ruleCategoryId = ruleCategoryId || categories[0]?.id || '';
-			transactionCategoryId = transactionCategoryId || categories[0]?.id || '';
 			status = m.review_status_ready();
 		} catch {
 			status = m.review_status_error();
@@ -147,11 +152,30 @@
 
 	function selectTransaction(transaction: Transaction) {
 		selectedTransaction = transaction;
-		transactionCategoryId = transaction.categoryId ?? categories[0]?.id ?? '';
+		transactionCategoryId = transaction.categoryId ?? '';
 		transactionNote = transaction.note ?? '';
 		transactionTags = transaction.tags.map((tag) => tag.name).join(', ');
-		transactionCreateRule = true;
+		transactionCreateRule = false;
+		transactionApplyRuleToExisting = false;
+		transactionRulePreview = null;
 		transactionRuleName = transaction.payee ? `${m.rule_for()} ${transaction.payee}` : '';
+	}
+
+	async function previewTransactionRule() {
+		if (!selectedTransaction?.payee || !transactionCategoryId) return;
+		transactionRulePreview = await fetchJson('/api/category-rules/preview', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				categoryId: transactionCategoryId,
+				name: transactionRuleName || `Rule for ${selectedTransaction.payee}`,
+				field: 'payee',
+				operator: 'contains',
+				pattern: selectedTransaction.payee,
+				priority: 100,
+				isGlobal: true
+			})
+		});
 	}
 
 	async function classifyTransaction(event: SubmitEvent) {
@@ -170,6 +194,7 @@
 					note: transactionNote.trim() || null,
 					tagNames: parseTags(transactionTags),
 					createRule: transactionCreateRule,
+					applyRuleToExisting: transactionCreateRule && transactionApplyRuleToExisting,
 					...(transactionCreateRule && transactionRuleName.trim()
 						? { ruleName: transactionRuleName.trim() }
 						: {})
@@ -313,12 +338,7 @@
 	}
 
 	async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-		const response = await fetch(url, init);
-		if (!response.ok) {
-			throw new Error(await response.text());
-		}
-
-		return (await response.json()) as T;
+		return fetchJsonWithRetry<T>(url, init);
 	}
 
 	function parseTags(value: string): string[] {
@@ -413,7 +433,7 @@
 						<h2 class="text-lg font-semibold text-zinc-950">{m.unknown_review_queue()}</h2>
 						<p class="mt-1 text-sm text-zinc-500">
 							{openReviewCount}
-							{m.open_items()}
+							{m.all_time_open()}
 						</p>
 					</div>
 					<form
@@ -511,6 +531,7 @@
 							bind:value={transactionCategoryId}
 							required
 						>
+							<option value="" disabled>{m.select_category()}</option>
 							{#each categories as category (category.id)}
 								<option value={category.id}>{category.name}</option>
 							{/each}
@@ -539,6 +560,22 @@
 							<span>{m.rule_name()}</span>
 							<input class="w-full rounded border-zinc-300" bind:value={transactionRuleName} />
 						</label>
+						<button
+							class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+							type="button"
+							onclick={previewTransactionRule}
+						>
+							{m.preview_rule_matches()}
+						</button>
+						{#if transactionRulePreview}
+							<div class="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+								<p>{m.rule_existing_matches({ count: transactionRulePreview.matchCount })}</p>
+								<label class="mt-2 flex items-center gap-2 font-medium">
+									<input type="checkbox" bind:checked={transactionApplyRuleToExisting} />
+									<span>{m.apply_rule_existing()}</span>
+								</label>
+							</div>
+						{/if}
 					{/if}
 					<button
 						class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"

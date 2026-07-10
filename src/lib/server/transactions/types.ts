@@ -75,5 +75,11 @@ export interface UpdateTransactionInput {
 	note?: string | null;
 	tagNames?: string[];
 	createRule?: boolean;
+	applyRuleToExisting?: boolean;
 	ruleName?: string;
 }
+
+export type TransactionUpdateResult = Transaction & {
+	classifiedCount: number;
+	bulkAppliedCount: number;
+};

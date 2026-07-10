@@ -11,7 +11,11 @@ export const PATCH: RequestHandler = async (event) => {
 			parseUpdateTransactionInput(event.params.id, await readJson(event.request))
 		);
 
-		return json({ transaction });
+		return json({
+			transaction,
+			classifiedCount: transaction.classifiedCount,
+			bulkAppliedCount: transaction.bulkAppliedCount
+		});
 	} catch (error) {
 		return jsonError(error);
 	}

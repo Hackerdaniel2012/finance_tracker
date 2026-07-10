@@ -10,7 +10,12 @@ import { createCategoryRule } from '../categories/repository';
 import type { DbClient } from '../db-client';
 import { confirmImport } from '../imports/confirm';
 import { sha256Hex } from '../imports/shared';
-import { listTransactions, listUnknownTransactions, updateTransaction } from './repository';
+import {
+	listTransactions,
+	listUnknownTransactions,
+	previewCategoryRule,
+	updateTransaction
+} from './repository';
 
 let db: DbClient;
 let sqlite: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -154,6 +159,54 @@ describe('transaction repository', () => {
 			pagination: { total: 1 },
 			transactions: [{ payee: 'Cafe' }]
 		});
+	});
+
+	it('previews and opt-in applies a rule only to existing unknown matches', async () => {
+		await seedTransactions();
+		const accountId = firstValue<string>(sqlite, 'SELECT id FROM accounts') ?? '';
+		const profileId = firstValue<string>(sqlite, 'SELECT id FROM import_profiles') ?? '';
+		await db
+			.prepare(
+				`INSERT INTO transactions (id, profile_id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text)
+			VALUES ('cafe-2', ?, ?, 'cafe-2', '2026-07-08', -500, 'Cafe Central', 'Cafe Central')`
+			)
+			.bind(profileId, accountId)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO transaction_review_flags (id, transaction_id, reason)
+			VALUES ('flag-cafe-2', 'cafe-2', 'unknown_category')`
+			)
+			.run();
+		const preview = await previewCategoryRule(db, {
+			field: 'payee',
+			operator: 'contains',
+			pattern: 'Cafe'
+		});
+		expect(preview.matchCount).toBe(2);
+		const selected = (await listUnknownTransactions(db, baseFilters())).transactions.find(
+			(item) => item.payee === 'Cafe'
+		);
+		const result = await updateTransaction(db, {
+			id: selected?.id ?? '',
+			categoryId: 'cat-leisure',
+			createRule: true,
+			applyRuleToExisting: true,
+			ruleName: 'All cafes'
+		});
+		expect(result.bulkAppliedCount).toBe(1);
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT classification_status FROM transactions WHERE id = 'cafe-2'"
+			)
+		).toBe('auto');
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT status FROM transaction_review_flags WHERE id = 'flag-cafe-2'"
+			)
+		).toBe('resolved');
 	});
 
 	it('returns not found errors for missing transactions and categories', async () => {

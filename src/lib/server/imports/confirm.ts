@@ -3,6 +3,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../accounts/error
 import { getProfile } from '../accounts/repository';
 import { listCategoryRules } from '../categories/repository';
 import type { CategoryRule } from '../categories/types';
+import { matchesCategoryRule } from '../categories/matcher';
 import type { DbClient, DbRow, DbStatement } from '../db-client';
 import { generateRecurringSuggestions } from '../recurring/repository';
 import { getDateRange, sha256Hex } from './shared';
@@ -305,40 +306,17 @@ function matchCategoryRule(
 	row: NormalizedTransaction,
 	rules: CategoryRule[]
 ): CategoryRule | undefined {
-	return rules.find((rule) => matchesRule(row, rule));
-}
-
-function matchesRule(row: NormalizedTransaction, rule: CategoryRule): boolean {
-	const value = getRuleFieldValue(row, rule.field).toLowerCase();
-	const pattern = rule.pattern.toLowerCase();
-
-	switch (rule.operator) {
-		case 'contains':
-			return value.includes(pattern);
-		case 'equals':
-			return value === pattern;
-		case 'starts_with':
-			return value.startsWith(pattern);
-		case 'regex':
-			try {
-				return new RegExp(rule.pattern, 'i').test(getRuleFieldValue(row, rule.field));
-			} catch {
-				return false;
-			}
-	}
-}
-
-function getRuleFieldValue(row: NormalizedTransaction, field: CategoryRule['field']): string {
-	switch (field) {
-		case 'payee':
-			return row.payee ?? '';
-		case 'description':
-			return row.description ?? '';
-		case 'note':
-			return row.note ?? '';
-		case 'search_text':
-			return row.searchText;
-	}
+	return rules.find((rule) =>
+		matchesCategoryRule(
+			{
+				payee: row.payee ?? null,
+				description: row.description ?? null,
+				note: row.note ?? null,
+				searchText: row.searchText
+			},
+			rule
+		)
+	);
 }
 
 interface DedupeRow extends DbRow {

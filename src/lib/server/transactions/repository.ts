@@ -1,4 +1,5 @@
 import { NotFoundError, ValidationError } from '../accounts/errors';
+import { matchesCategoryRule } from '../categories/matcher';
 import type { DbClient, DbRow, DbValue } from '../db-client';
 import type {
 	Transaction,
@@ -7,6 +8,7 @@ import type {
 	TransactionListResult,
 	TransactionSort,
 	TransactionTag,
+	TransactionUpdateResult,
 	UpdateTransactionInput
 } from './types';
 
@@ -54,7 +56,7 @@ export async function listUnknownTransactions(
 export async function updateTransaction(
 	db: DbClient,
 	input: UpdateTransactionInput
-): Promise<Transaction> {
+): Promise<TransactionUpdateResult> {
 	const existing = await getTransaction(db, input.id);
 	if (!existing) {
 		throw new NotFoundError('Transaction not found');
@@ -90,15 +92,17 @@ export async function updateTransaction(
 		await resolveReviewFlag(db, input.id);
 	}
 
+	let bulkAppliedCount = 0;
 	if (input.createRule === true) {
 		const categoryId = input.categoryId ?? existing.categoryId;
 		if (!categoryId) {
 			throw new ValidationError('categoryId is required to create a category rule');
 		}
-		await createRuleFromTransaction(db, {
+		bulkAppliedCount = await createRuleFromTransaction(db, {
 			transactionId: input.id,
 			categoryId,
-			ruleName: input.ruleName
+			ruleName: input.ruleName,
+			applyToExisting: input.applyRuleToExisting === true
 		});
 	}
 
@@ -107,7 +111,7 @@ export async function updateTransaction(
 		throw new NotFoundError('Transaction not found');
 	}
 
-	return updated;
+	return { ...updated, classifiedCount: 1, bulkAppliedCount };
 }
 
 async function getTransaction(db: DbClient, id: string): Promise<Transaction | null> {
@@ -353,8 +357,8 @@ async function resolveReviewFlag(db: DbClient, transactionId: string): Promise<v
 
 async function createRuleFromTransaction(
 	db: DbClient,
-	input: { transactionId: string; categoryId: string; ruleName?: string }
-): Promise<void> {
+	input: { transactionId: string; categoryId: string; ruleName?: string; applyToExisting: boolean }
+): Promise<number> {
 	const row = await db
 		.prepare('SELECT payee, search_text FROM transactions WHERE id = ?')
 		.bind(input.transactionId)
@@ -380,6 +384,83 @@ async function createRuleFromTransaction(
 			1
 		)
 		.run();
+
+	if (!input.applyToExisting) return 0;
+	return applyRuleToUnknownTransactions(db, {
+		field: row?.payee?.trim() ? 'payee' : 'search_text',
+		operator: 'contains',
+		pattern,
+		categoryId: input.categoryId,
+		excludeId: input.transactionId
+	});
+}
+
+export async function previewCategoryRule(
+	db: DbClient,
+	rule: RuleMatchDraft
+): Promise<{ matchCount: number; sample: RulePreviewRow[] }> {
+	const rows = await listUnknownRuleRows(db);
+	const matches = rows.filter((row) => matchesCategoryRule(mapRuleSource(row), rule));
+	return {
+		matchCount: matches.length,
+		sample: matches.slice(0, 5).map((row) => ({
+			id: row.id,
+			bookingDate: row.booking_date,
+			payee: row.payee,
+			amountCents: row.amount_cents
+		}))
+	};
+}
+
+async function applyRuleToUnknownTransactions(
+	db: DbClient,
+	rule: RuleMatchDraft & { categoryId: string; excludeId: string }
+): Promise<number> {
+	const rows = (await listUnknownRuleRows(db)).filter(
+		(row) => row.id !== rule.excludeId && matchesCategoryRule(mapRuleSource(row), rule)
+	);
+	for (let offset = 0; offset < rows.length; offset += 200) {
+		const statements = rows.slice(offset, offset + 200).flatMap((row) => [
+			db
+				.prepare(
+					`UPDATE transactions
+				SET category_id = ?, classification_status = 'auto', updated_at = CURRENT_TIMESTAMP
+				WHERE id = ? AND classification_status = 'unknown'`
+				)
+				.bind(rule.categoryId, row.id),
+			db
+				.prepare(
+					`UPDATE transaction_review_flags
+				SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
+				WHERE transaction_id = ? AND status = 'open'`
+				)
+				.bind(row.id)
+		]);
+		if (db.batch) await db.batch(statements);
+		else for (const statement of statements) await statement.run();
+	}
+	return rows.length;
+}
+
+async function listUnknownRuleRows(db: DbClient): Promise<RuleMatchRow[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT id, booking_date, amount_cents, payee, description, note, search_text
+		FROM transactions
+		WHERE classification_status = 'unknown'
+		ORDER BY booking_date DESC, id DESC`
+		)
+		.all<RuleMatchRow>();
+	return results;
+}
+
+function mapRuleSource(row: RuleMatchRow) {
+	return {
+		payee: row.payee,
+		description: row.description,
+		note: row.note,
+		searchText: row.search_text
+	};
 }
 
 async function assertCategoryExists(db: DbClient, categoryId: string): Promise<void> {
@@ -482,6 +563,29 @@ interface TagOnlyRow extends DbRow {
 interface RuleSourceRow extends DbRow {
 	payee: string | null;
 	search_text: string | null;
+}
+
+interface RuleMatchDraft {
+	field: 'payee' | 'description' | 'note' | 'search_text';
+	operator: 'contains' | 'equals' | 'starts_with' | 'regex';
+	pattern: string;
+}
+
+interface RuleMatchRow extends DbRow {
+	id: string;
+	booking_date: string;
+	amount_cents: number;
+	payee: string | null;
+	description: string | null;
+	note: string | null;
+	search_text: string;
+}
+
+interface RulePreviewRow {
+	id: string;
+	bookingDate: string;
+	payee: string | null;
+	amountCents: number;
 }
 
 interface IdRow extends DbRow {
