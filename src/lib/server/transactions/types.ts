@@ -43,6 +43,7 @@ export interface Transaction {
 
 export interface TransactionListFilters {
 	accountId?: string;
+	subaccount?: string;
 	profileId?: string;
 	categoryId?: string;
 	status?: TransactionClassificationStatus;

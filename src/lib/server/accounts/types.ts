@@ -24,6 +24,7 @@ export interface ImportProfile {
 
 export interface AccountWithProfile extends Account {
 	profile: ImportProfile | null;
+	subaccounts: string[];
 }
 
 export interface CreateAccountInput {

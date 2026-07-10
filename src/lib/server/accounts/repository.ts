@@ -11,32 +11,63 @@ import type {
 } from './types';
 
 export async function listAccounts(db: DbClient): Promise<AccountWithProfile[]> {
+	const [{ results }, subaccountsByAccountId] = await Promise.all([
+		db
+			.prepare(
+				`SELECT
+					a.id AS account_id,
+					a.name AS account_name,
+					a.institution,
+					a.currency,
+					a.opening_balance_cents,
+					a.current_balance_cents,
+					a.display_order,
+					a.created_at AS account_created_at,
+					a.updated_at AS account_updated_at,
+					p.id AS profile_id,
+					p.account_id AS profile_account_id,
+					p.bank_id,
+					p.label,
+					p.status,
+					p.created_at AS profile_created_at,
+					p.updated_at AS profile_updated_at
+				FROM accounts a
+				LEFT JOIN import_profiles p ON p.account_id = a.id
+				ORDER BY a.display_order ASC, a.created_at ASC`
+			)
+			.all<AccountProfileRow>(),
+		getSubaccountsByAccountId(db)
+	]);
+
+	return results.map((row) =>
+		mapAccountWithProfile(row, subaccountsByAccountId.get(row.account_id) ?? [])
+	);
+}
+
+async function getSubaccountsByAccountId(db: DbClient): Promise<Map<string, string[]>> {
 	const { results } = await db
 		.prepare(
 			`SELECT
-				a.id AS account_id,
-				a.name AS account_name,
-				a.institution,
-				a.currency,
-				a.opening_balance_cents,
-				a.current_balance_cents,
-				a.display_order,
-				a.created_at AS account_created_at,
-				a.updated_at AS account_updated_at,
-				p.id AS profile_id,
-				p.account_id AS profile_account_id,
-				p.bank_id,
-				p.label,
-				p.status,
-				p.created_at AS profile_created_at,
-				p.updated_at AS profile_updated_at
-			FROM accounts a
-			LEFT JOIN import_profiles p ON p.account_id = a.id
-			ORDER BY a.display_order ASC, a.created_at ASC`
+				account_id,
+				GROUP_CONCAT(DISTINCT subaccount) AS subaccounts
+			FROM transactions
+			WHERE subaccount IS NOT NULL
+			GROUP BY account_id`
 		)
-		.all<AccountProfileRow>();
+		.all<SubaccountRow>();
 
-	return results.map(mapAccountWithProfile);
+	const map = new Map<string, string[]>();
+	for (const row of results) {
+		map.set(
+			row.account_id,
+			row.subaccounts
+				.split(',')
+				.filter((name) => name.length > 0)
+				.sort()
+		);
+	}
+
+	return map;
 }
 
 export async function createAccount(db: DbClient, input: CreateAccountInput): Promise<Account> {
@@ -239,6 +270,11 @@ interface AccountProfileRow extends DbRow {
 	profile_updated_at: string | null;
 }
 
+interface SubaccountRow extends DbRow {
+	account_id: string;
+	subaccounts: string;
+}
+
 function mapAccount(row: AccountRow): Account {
 	return {
 		id: row.id,
@@ -265,7 +301,7 @@ function mapProfile(row: ProfileRow): ImportProfile {
 	};
 }
 
-function mapAccountWithProfile(row: AccountProfileRow): AccountWithProfile {
+function mapAccountWithProfile(row: AccountProfileRow, subaccounts: string[]): AccountWithProfile {
 	return {
 		id: row.account_id,
 		name: row.account_name,
@@ -287,6 +323,7 @@ function mapAccountWithProfile(row: AccountProfileRow): AccountWithProfile {
 						createdAt: row.profile_created_at ?? '',
 						updatedAt: row.profile_updated_at ?? ''
 					}
-				: null
+				: null,
+		subaccounts
 	};
 }

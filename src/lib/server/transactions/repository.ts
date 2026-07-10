@@ -170,6 +170,11 @@ function buildTransactionWhere(filters: TransactionListFilters): {
 		values.push(filters.accountId);
 	}
 
+	if (filters.subaccount) {
+		clauses.push('t.subaccount = ?');
+		values.push(filters.subaccount);
+	}
+
 	if (filters.profileId) {
 		clauses.push('t.profile_id = ?');
 		values.push(filters.profileId);
