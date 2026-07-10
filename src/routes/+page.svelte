@@ -2,8 +2,9 @@
 	import * as m from '$lib/paraglide/messages';
 	import type { MonthCashflowReport, UpcomingIncome } from '$lib/cashflow';
 	import { buildAccountScopeOptions, buildAccountScopeQuery } from '$lib/account-scope';
-	import { LineChart } from 'layerchart/svg';
+	import { BarChart, LineChart } from 'layerchart/svg';
 	import { onMount } from 'svelte';
+	import { fetchJsonWithRetry } from '$lib/fetch-json';
 
 	type BankId = 'n26' | 'trade_republic' | 'dkb';
 
@@ -13,6 +14,7 @@
 		institution: string | null;
 		openingBalanceCents: number;
 		currentBalanceCents: number | null;
+		balanceCents: number;
 		profile: { id: string; bankId: BankId; label: string } | null;
 		subaccounts: string[];
 	}
@@ -27,6 +29,15 @@
 			unknownCount: number;
 		};
 		byAccount: Array<{ accountId: string; accountName: string; balanceCents: number }>;
+		byCategory: Array<{
+			categoryId: string | null;
+			categoryName: string;
+			type: string;
+			expenseCents: number;
+			incomeCents: number;
+			netCents: number;
+			transactionCount: number;
+		}>;
 		recentTransactions: Array<{
 			id: string;
 			accountName: string;
@@ -90,10 +101,17 @@
 	);
 	const totalAccountBalanceCents = $derived(
 		netWorth?.accounts.reduce((sum, account) => sum + account.balanceCents, 0) ??
-			accounts.reduce(
-				(sum, account) => sum + (account.currentBalanceCents ?? account.openingBalanceCents),
-				0
-			)
+			accounts.reduce((sum, account) => sum + account.balanceCents, 0)
+	);
+	const expenseCategoryPoints = $derived(
+		(summary?.byCategory ?? [])
+			.filter((category) => category.expenseCents > 0)
+			.slice(0, 8)
+			.map((category) => ({
+				category: category.categoryName,
+				knownExpense: category.categoryId ? category.expenseCents / 100 : 0,
+				unknownExpense: category.categoryId ? 0 : category.expenseCents / 100
+			}))
 	);
 
 	onMount(() => {
@@ -126,19 +144,20 @@
 
 		try {
 			const reportQuery = buildDashboardReportQuery();
-			const [summaryPayload, netWorthPayload, cashflowPayload, projectionPayload] =
-				await Promise.all([
-					fetchJson<{ summary: SummaryReport }>(`/api/summary${reportQuery}`),
-					fetchJson<{ netWorth: NetWorthReport }>(`/api/net-worth${reportQuery}`),
-					fetchJson<{ monthCashflow: MonthCashflowReport }>(`/api/month-cashflow${reportQuery}`),
-					fetchJson<{ projection: BalanceProjection }>(`/api/balance-before-salary${reportQuery}`)
-				]);
-
-			summary = summaryPayload.summary;
-			netWorth = netWorthPayload.netWorth;
-			monthCashflow = cashflowPayload.monthCashflow;
-			projection = projectionPayload.projection;
-			dashboardStatus = m.dashboard_status_ready();
+			const results = await Promise.allSettled([
+				fetchJson<{ summary: SummaryReport }>(`/api/summary${reportQuery}`),
+				fetchJson<{ netWorth: NetWorthReport }>(`/api/net-worth${reportQuery}`),
+				fetchJson<{ monthCashflow: MonthCashflowReport }>(`/api/month-cashflow${reportQuery}`),
+				fetchJson<{ projection: BalanceProjection }>(`/api/balance-before-salary${reportQuery}`)
+			]);
+			if (results[0].status === 'fulfilled') summary = results[0].value.summary;
+			if (results[1].status === 'fulfilled') netWorth = results[1].value.netWorth;
+			if (results[2].status === 'fulfilled') monthCashflow = results[2].value.monthCashflow;
+			if (results[3].status === 'fulfilled') projection = results[3].value.projection;
+			if (results.some((result) => result.status === 'rejected')) {
+				dashboardStatus = m.dashboard_status_error();
+				dashboardError = m.dashboard_status_error();
+			} else dashboardStatus = m.dashboard_status_ready();
 		} catch {
 			dashboardStatus = m.dashboard_status_error();
 			dashboardError = m.dashboard_status_error();
@@ -202,12 +221,7 @@
 	}
 
 	async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
-		const response = await fetch(url, init);
-		if (!response.ok) {
-			throw new Error(await response.text());
-		}
-
-		return (await response.json()) as T;
+		return fetchJsonWithRetry<T>(url, init);
 	}
 
 	function eurosToCents(value: string): number {
@@ -230,8 +244,7 @@
 	function getAccountBalanceCents(account: AccountWithProfile): number {
 		return (
 			netWorth?.accounts.find((balance) => balance.accountId === account.id)?.balanceCents ??
-			account.currentBalanceCents ??
-			account.openingBalanceCents
+			account.balanceCents
 		);
 	}
 
@@ -282,6 +295,7 @@
 		{#if dashboardError}
 			<p class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
 				{dashboardError}
+				<button class="ml-3 underline" type="button" onclick={loadDashboard}>{m.retry()}</button>
 			</p>
 		{/if}
 	</section>
@@ -291,25 +305,25 @@
 			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.total_balance()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
-					{centsToEuros(totalAccountBalanceCents)}
+					{netWorth || accounts.length > 0 ? centsToEuros(totalAccountBalanceCents) : '—'}
 				</p>
 			</article>
 			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.month_net()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
-					{centsToEuros(monthCashflow?.actual.netCents ?? 0)}
+					{monthCashflow ? centsToEuros(monthCashflow.actual.netCents) : '—'}
 				</p>
 			</article>
 			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
-				<p class="text-sm font-medium text-zinc-500">{m.unknown_transactions()}</p>
+				<p class="text-sm font-medium text-zinc-500">{m.unknown_in_period()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
-					{summary?.totals.unknownCount ?? 0}
+					{summary ? summary.totals.unknownCount : '—'}
 				</p>
 			</article>
 			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.balance_before_salary()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
-					{centsToEuros(projection?.projectedBalanceCents ?? 0)}
+					{projection ? centsToEuros(projection.projectedBalanceCents) : '—'}
 				</p>
 				<p class="mt-1 text-xs text-zinc-500">
 					{m.projection_date()}: {formatDate(projection?.projectionDate ?? null)}
@@ -342,6 +356,35 @@
 					>
 						<p class="text-sm text-zinc-500">{m.no_chart_data()}</p>
 					</div>
+				{/if}
+			</div>
+		</section>
+
+		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+			<div>
+				<h2 class="text-lg font-semibold text-zinc-950">{m.expenses_by_category()}</h2>
+				<p class="mt-1 text-sm text-zinc-500">
+					{summary?.range.from ?? ''} – {summary?.range.to ?? ''}
+				</p>
+			</div>
+			<div class="mt-5 h-72">
+				{#if expenseCategoryPoints.length > 0}
+					<BarChart
+						data={expenseCategoryPoints}
+						x="knownExpense"
+						y="category"
+						orientation="horizontal"
+						axis
+						grid
+						seriesLayout="stack"
+						series={[
+							{ key: 'known', value: 'knownExpense', color: '#047857' },
+							{ key: 'unknown', value: 'unknownExpense', color: '#d97706' }
+						]}
+						class="h-full w-full"
+					/>
+				{:else}
+					<p class="text-sm text-zinc-500">{m.no_chart_data()}</p>
 				{/if}
 			</div>
 		</section>

@@ -144,6 +144,7 @@ describe('/api/accounts', () => {
 			accounts: [
 				{
 					id: account.id,
+					balanceCents: -300,
 					subaccounts: ['20k in 2023', 'Hauptkonto']
 				}
 			]

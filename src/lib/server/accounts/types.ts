@@ -23,6 +23,7 @@ export interface ImportProfile {
 }
 
 export interface AccountWithProfile extends Account {
+	balanceCents: number;
 	profile: ImportProfile | null;
 	subaccounts: string[];
 }

@@ -21,6 +21,7 @@ export async function listAccounts(db: DbClient): Promise<AccountWithProfile[]> 
 					a.currency,
 					a.opening_balance_cents,
 					a.current_balance_cents,
+					COALESCE(a.current_balance_cents, a.opening_balance_cents + COALESCE(tx.net_cents, 0)) AS balance_cents,
 					a.display_order,
 					a.created_at AS account_created_at,
 					a.updated_at AS account_updated_at,
@@ -33,6 +34,11 @@ export async function listAccounts(db: DbClient): Promise<AccountWithProfile[]> 
 					p.updated_at AS profile_updated_at
 				FROM accounts a
 				LEFT JOIN import_profiles p ON p.account_id = a.id
+				LEFT JOIN (
+					SELECT account_id, SUM(amount_cents) AS net_cents
+					FROM transactions
+					GROUP BY account_id
+				) tx ON tx.account_id = a.id
 				ORDER BY a.display_order ASC, a.created_at ASC`
 			)
 			.all<AccountProfileRow>(),
@@ -258,6 +264,7 @@ interface AccountProfileRow extends DbRow {
 	currency: 'EUR';
 	opening_balance_cents: number;
 	current_balance_cents: number | null;
+	balance_cents: number;
 	display_order: number;
 	account_created_at: string;
 	account_updated_at: string;
@@ -309,6 +316,7 @@ function mapAccountWithProfile(row: AccountProfileRow, subaccounts: string[]): A
 		currency: row.currency,
 		openingBalanceCents: row.opening_balance_cents,
 		currentBalanceCents: row.current_balance_cents,
+		balanceCents: row.balance_cents,
 		displayOrder: row.display_order,
 		createdAt: row.account_created_at,
 		updatedAt: row.account_updated_at,

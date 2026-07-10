@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { resolve } from '$app/paths';
 	import { untrack } from 'svelte';
 	import type { PageData } from './$types';
@@ -12,6 +13,7 @@
 		institution: string | null;
 		openingBalanceCents: number;
 		currentBalanceCents: number | null;
+		balanceCents: number;
 		profile: { id: string; bankId: BankId; label: string } | null;
 	}
 
@@ -121,12 +123,7 @@
 	}
 
 	async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
-		const response = await fetch(url, init);
-		if (!response.ok) {
-			throw new Error(await response.text());
-		}
-
-		return (await response.json()) as T;
+		return fetchJsonWithRetry<T>(url, init);
 	}
 
 	function eurosToCents(value: string): number {
@@ -142,7 +139,7 @@
 	}
 
 	function accountBalance(account: AccountWithProfile): number {
-		return account.currentBalanceCents ?? account.openingBalanceCents;
+		return account.balanceCents;
 	}
 </script>
 

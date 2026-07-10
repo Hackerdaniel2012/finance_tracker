@@ -44,7 +44,9 @@ export const load: PageLoad = async ({ fetch, params }) => {
 				categoryId: string | null;
 				categoryName: string;
 				type: string;
-				amountCents: number;
+				expenseCents: number;
+				incomeCents: number;
+				netCents: number;
 				transactionCount: number;
 			}>;
 		};

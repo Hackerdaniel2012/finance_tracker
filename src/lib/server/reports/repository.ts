@@ -235,13 +235,15 @@ async function getSummaryByCategory(
 				t.category_id,
 				COALESCE(c.name, 'Unknown') AS category_name,
 				COALESCE(c.type, 'unknown') AS category_type,
-				SUM(t.amount_cents) AS amount_cents,
+				-COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN t.amount_cents ELSE 0 END), 0) AS expense_cents,
+				COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) AS income_cents,
+				COALESCE(SUM(t.amount_cents), 0) AS net_cents,
 				COUNT(*) AS transaction_count
 			FROM transactions t
 			LEFT JOIN categories c ON c.id = t.category_id
 			WHERE t.booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}
 			GROUP BY t.category_id, c.name, c.type
-			ORDER BY ABS(SUM(t.amount_cents)) DESC, category_name ASC`
+			ORDER BY expense_cents DESC, income_cents DESC, category_name ASC`
 		)
 		.bind(
 			range.from,
@@ -255,7 +257,9 @@ async function getSummaryByCategory(
 		categoryId: row.category_id,
 		categoryName: row.category_name,
 		type: row.category_type,
-		amountCents: row.amount_cents,
+		expenseCents: row.expense_cents,
+		incomeCents: row.income_cents,
+		netCents: row.net_cents,
 		transactionCount: row.transaction_count
 	}));
 }
@@ -646,7 +650,9 @@ interface CategorySummaryRow extends DbRow {
 	category_id: string | null;
 	category_name: string;
 	category_type: string;
-	amount_cents: number;
+	expense_cents: number;
+	income_cents: number;
+	net_cents: number;
 	transaction_count: number;
 }
 

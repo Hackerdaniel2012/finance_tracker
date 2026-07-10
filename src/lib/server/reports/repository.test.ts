@@ -37,19 +37,25 @@ describe('reports repository', () => {
 				expect.objectContaining({
 					categoryId: 'cat-salary',
 					categoryName: 'Salary',
-					amountCents: 250000,
+					incomeCents: 250000,
+					expenseCents: 0,
+					netCents: 250000,
 					transactionCount: 1
 				}),
 				expect.objectContaining({
 					categoryId: 'cat-groceries',
 					categoryName: 'Groceries',
-					amountCents: -1234,
+					expenseCents: 1234,
+					incomeCents: 0,
+					netCents: -1234,
 					transactionCount: 1
 				}),
 				expect.objectContaining({
 					categoryId: null,
 					categoryName: 'Unknown',
-					amountCents: -400,
+					expenseCents: 400,
+					incomeCents: 0,
+					netCents: -400,
 					transactionCount: 1
 				})
 			])

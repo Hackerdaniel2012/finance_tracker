@@ -36,7 +36,9 @@ export interface SummaryReport {
 		categoryId: string | null;
 		categoryName: string;
 		type: string;
-		amountCents: number;
+		expenseCents: number;
+		incomeCents: number;
+		netCents: number;
 		transactionCount: number;
 	}>;
 	byAccount: Array<{
