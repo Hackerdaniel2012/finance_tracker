@@ -278,12 +278,7 @@
 	<section class="space-y-5 lg:col-span-2">
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 			<div>
-				<div
-					class="inline-flex rounded border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800"
-				>
-					{m.phase_badge()}
-				</div>
-				<h1 class="mt-4 text-3xl font-semibold tracking-normal text-zinc-950 sm:text-4xl">
+				<h1 class="text-3xl font-semibold tracking-normal text-zinc-950 sm:text-4xl">
 					{m.app_title()}
 				</h1>
 				<p class="mt-2 max-w-3xl text-base leading-7 text-zinc-700">{m.app_subtitle()}</p>
