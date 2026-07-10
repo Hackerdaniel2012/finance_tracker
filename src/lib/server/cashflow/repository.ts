@@ -3,10 +3,55 @@ import type {
 	BalanceBeforeSalaryAccountProjection,
 	BalanceBeforeSalaryProjection,
 	CashflowWindow,
+	MonthCashflowReport,
 	UpcomingIncome,
 	UpcomingPayment
 } from './types';
 import type { RecurringCadence } from '../recurring/types';
+
+export async function getMonthCashflowReport(
+	db: DbClient,
+	window: CashflowWindow
+): Promise<MonthCashflowReport> {
+	const from = startOfMonth(window.asOf);
+	const accountClause = window.accountId ? 'AND account_id = ?' : '';
+	const [actualRow, upcomingPayments, upcomingIncome] = await Promise.all([
+		db
+			.prepare(
+				`SELECT
+					COALESCE(SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END), 0) AS income_cents,
+					COALESCE(SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END), 0) AS expense_cents,
+					COALESCE(SUM(amount_cents), 0) AS net_cents
+				FROM transactions
+				WHERE booking_date BETWEEN ? AND ? ${accountClause}`
+			)
+			.bind(from, window.asOf, ...(window.accountId ? [window.accountId] : []))
+			.first<MonthActualRow>(),
+		getUpcomingPayments(db, window),
+		getUpcomingIncome(db, window)
+	]);
+	const actual = {
+		incomeCents: actualRow?.income_cents ?? 0,
+		expenseCents: actualRow?.expense_cents ?? 0,
+		netCents: actualRow?.net_cents ?? 0
+	};
+	const incomeCents = upcomingIncome.reduce((sum, income) => sum + income.amountCents, 0);
+	const paymentCents = upcomingPayments.reduce((sum, payment) => sum + payment.amountCents, 0);
+	const forecast = {
+		incomeCents,
+		paymentCents,
+		netCents: incomeCents - paymentCents
+	};
+
+	return {
+		range: { from, asOf: window.asOf, to: window.monthEnd },
+		actual,
+		forecast,
+		projectedNetCents: actual.netCents + forecast.netCents,
+		upcomingPayments,
+		upcomingIncome
+	};
+}
 
 export async function getUpcomingPayments(
 	db: DbClient,
@@ -400,6 +445,10 @@ function previousDate(isoDate: string): string {
 	return date.toISOString().slice(0, 10);
 }
 
+function startOfMonth(isoDate: string): string {
+	return `${isoDate.slice(0, 7)}-01`;
+}
+
 function nextCadenceDate(isoDate: string, cadence: RecurringCadence): string {
 	const date = new Date(`${isoDate}T00:00:00.000Z`);
 	switch (cadence) {
@@ -433,6 +482,12 @@ interface UpcomingPaymentRow extends DbRow {
 	amount_cents: number;
 	due_date: string;
 	note: string | null;
+}
+
+interface MonthActualRow extends DbRow {
+	income_cents: number;
+	expense_cents: number;
+	net_cents: number;
 }
 
 interface UpcomingIncomeRow extends DbRow {

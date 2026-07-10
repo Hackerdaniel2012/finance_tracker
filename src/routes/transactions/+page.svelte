@@ -423,8 +423,8 @@
 		{/if}
 	</section>
 
-	<section class="grid gap-6">
-		<section class="rounded border border-zinc-200 bg-white shadow-sm">
+	<section class="min-w-0 grid gap-6">
+		<section class="min-w-0 rounded border border-zinc-200 bg-white shadow-sm">
 			<div class="flex flex-col gap-3 border-b border-zinc-200 p-5 sm:flex-row sm:justify-between">
 				<div>
 					<h2 class="text-lg font-semibold text-zinc-950">{m.transaction_table()}</h2>
@@ -455,7 +455,7 @@
 			{#if transactions.length === 0}
 				<p class="p-5 text-sm text-zinc-600">{m.no_transactions()}</p>
 			{:else}
-				<div class="overflow-x-auto">
+				<div class="max-w-full overflow-x-auto">
 					<table class="min-w-full divide-y divide-zinc-200 text-sm">
 						<thead class="bg-zinc-50 text-left text-xs font-semibold uppercase text-zinc-500">
 							<tr>

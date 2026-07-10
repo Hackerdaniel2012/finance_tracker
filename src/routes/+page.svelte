@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import type { MonthCashflowReport, UpcomingIncome, UpcomingPayment } from '$lib/cashflow';
 	import { LineChart } from 'layerchart/svg';
 	import { onMount } from 'svelte';
 
@@ -46,20 +47,6 @@
 		liabilities: Array<{ id: string; name: string; amountCents: number; asOfDate: string }>;
 	}
 
-	interface UpcomingPayment {
-		id: string;
-		payee: string;
-		amountCents: number;
-		dueDate: string;
-	}
-
-	interface UpcomingIncome {
-		id: string;
-		payer: string;
-		amountCents: number;
-		dueDate: string;
-	}
-
 	interface BalanceProjection {
 		asOf: string;
 		projectionDate: string;
@@ -78,8 +65,7 @@
 	let accounts = $state<AccountWithProfile[]>([]);
 	let summary = $state<SummaryReport | null>(null);
 	let netWorth = $state<NetWorthReport | null>(null);
-	let upcomingPayments = $state<UpcomingPayment[]>([]);
-	let upcomingIncome = $state<UpcomingIncome[]>([]);
+	let monthCashflow = $state<MonthCashflowReport | null>(null);
 	let projection = $state<BalanceProjection | null>(null);
 	let status = $state(m.setup_status_loading());
 	let dashboardStatus = $state(m.dashboard_status_loading());
@@ -96,7 +82,7 @@
 
 	const netWorthPoints = $derived(
 		netWorth?.points.map((point) => ({
-			date: point.date,
+			date: new Date(`${point.date}T00:00:00.000Z`),
 			netWorthCents: point.netWorthCents / 100
 		})) ?? []
 	);
@@ -138,26 +124,17 @@
 
 		try {
 			const reportQuery = buildDashboardReportQuery();
-			const summaryPayload = await fetchJson<{ summary: SummaryReport }>(
-				`/api/summary${reportQuery}`
-			);
-			const netWorthPayload = await fetchJson<{ netWorth: NetWorthReport }>(
-				`/api/net-worth${reportQuery}`
-			);
-			const paymentsPayload = await fetchJson<{ upcomingPayments: UpcomingPayment[] }>(
-				`/api/upcoming-payments${reportQuery}`
-			);
-			const incomePayload = await fetchJson<{ upcomingIncome: UpcomingIncome[] }>(
-				`/api/upcoming-income${reportQuery}`
-			);
-			const projectionPayload = await fetchJson<{ projection: BalanceProjection }>(
-				`/api/balance-before-salary${reportQuery}`
-			);
+			const [summaryPayload, netWorthPayload, cashflowPayload, projectionPayload] =
+				await Promise.all([
+					fetchJson<{ summary: SummaryReport }>(`/api/summary${reportQuery}`),
+					fetchJson<{ netWorth: NetWorthReport }>(`/api/net-worth${reportQuery}`),
+					fetchJson<{ monthCashflow: MonthCashflowReport }>(`/api/month-cashflow${reportQuery}`),
+					fetchJson<{ projection: BalanceProjection }>(`/api/balance-before-salary${reportQuery}`)
+				]);
 
 			summary = summaryPayload.summary;
 			netWorth = netWorthPayload.netWorth;
-			upcomingPayments = paymentsPayload.upcomingPayments;
-			upcomingIncome = incomePayload.upcomingIncome;
+			monthCashflow = cashflowPayload.monthCashflow;
 			projection = projectionPayload.projection;
 			dashboardStatus = m.dashboard_status_ready();
 		} catch {
@@ -330,7 +307,7 @@
 			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.month_net()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
-					{centsToEuros(summary?.totals.netCents ?? 0)}
+					{centsToEuros(monthCashflow?.actual.netCents ?? 0)}
 				</p>
 			</article>
 			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
@@ -366,6 +343,7 @@
 						height={240}
 						axis
 						grid
+						props={{ xAxis: { tickSpacing: 110 } }}
 						class="h-full w-full text-emerald-700"
 					/>
 				{:else}
@@ -378,7 +356,7 @@
 			</div>
 		</section>
 
-		<section class="grid gap-6 xl:grid-cols-2">
+		<section class="grid gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
 			<article class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.recent_transactions()}</h2>
 				<div class="mt-4 divide-y divide-zinc-200">
@@ -404,14 +382,59 @@
 
 			<article class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.cashflow_this_month()}</h2>
+				<div class="mt-4 grid gap-3 sm:grid-cols-3">
+					<div class="rounded bg-zinc-50 p-3">
+						<p class="text-xs font-medium text-zinc-500">{m.actual_income()}</p>
+						<p class="mt-1 font-semibold text-emerald-700">
+							{centsToEuros(monthCashflow?.actual.incomeCents ?? 0)}
+						</p>
+					</div>
+					<div class="rounded bg-zinc-50 p-3">
+						<p class="text-xs font-medium text-zinc-500">{m.actual_expenses()}</p>
+						<p class="mt-1 font-semibold text-zinc-950">
+							{centsToEuros(monthCashflow?.actual.expenseCents ?? 0)}
+						</p>
+					</div>
+					<div class="rounded bg-zinc-50 p-3">
+						<p class="text-xs font-medium text-zinc-500">{m.actual_net()}</p>
+						<p class="mt-1 font-semibold text-zinc-950">
+							{centsToEuros(monthCashflow?.actual.netCents ?? 0)}
+						</p>
+					</div>
+				</div>
+				{#if (monthCashflow?.actual.incomeCents ?? 0) === 0 && (monthCashflow?.actual.expenseCents ?? 0) === 0}
+					<p class="mt-3 text-sm text-zinc-500">{m.no_actual_cashflow()}</p>
+				{/if}
+				<div class="mt-5 border-t border-zinc-200 pt-4">
+					<div class="grid gap-3 sm:grid-cols-3">
+						<div>
+							<p class="text-xs font-medium text-zinc-500">{m.forecast_income()}</p>
+							<p class="mt-1 font-semibold text-emerald-700">
+								{centsToEuros(monthCashflow?.forecast.incomeCents ?? 0)}
+							</p>
+						</div>
+						<div>
+							<p class="text-xs font-medium text-zinc-500">{m.forecast_payments()}</p>
+							<p class="mt-1 font-semibold text-zinc-950">
+								{centsToEuros(monthCashflow?.forecast.paymentCents ?? 0)}
+							</p>
+						</div>
+						<div>
+							<p class="text-xs font-medium text-zinc-500">{m.projected_month_net()}</p>
+							<p class="mt-1 font-semibold text-zinc-950">
+								{centsToEuros(monthCashflow?.projectedNetCents ?? 0)}
+							</p>
+						</div>
+					</div>
+				</div>
 				<div class="mt-4 grid gap-4 sm:grid-cols-2">
 					<div>
 						<h3 class="text-sm font-semibold text-zinc-700">{m.upcoming_payments()}</h3>
 						<div class="mt-2 divide-y divide-zinc-200">
-							{#if upcomingPayments.length === 0}
+							{#if (monthCashflow?.upcomingPayments.length ?? 0) === 0}
 								<p class="py-3 text-sm text-zinc-500">{m.no_upcoming_payments()}</p>
 							{:else}
-								{#each upcomingPayments as payment (payment.id)}
+								{#each monthCashflow?.upcomingPayments ?? [] as payment (payment.id)}
 									<div class="flex justify-between gap-3 py-3 text-sm">
 										<span class="text-zinc-700">{payment.payee}</span>
 										<span class="font-medium text-zinc-950"
@@ -425,10 +448,10 @@
 					<div>
 						<h3 class="text-sm font-semibold text-zinc-700">{m.upcoming_income()}</h3>
 						<div class="mt-2 divide-y divide-zinc-200">
-							{#if upcomingIncome.length === 0}
+							{#if (monthCashflow?.upcomingIncome.length ?? 0) === 0}
 								<p class="py-3 text-sm text-zinc-500">{m.no_upcoming_income()}</p>
 							{:else}
-								{#each upcomingIncome as income (income.id)}
+								{#each monthCashflow?.upcomingIncome ?? [] as income (income.id)}
 									<div class="flex justify-between gap-3 py-3 text-sm">
 										<span class="text-zinc-700">{income.payer}</span>
 										<span class="font-medium text-zinc-950">{centsToEuros(income.amountCents)}</span

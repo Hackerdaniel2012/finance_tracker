@@ -15,7 +15,7 @@
 		"format": "prettier --write .",
 		"test:unit": "vitest --run",
 		"test": "pnpm test:unit",
-		"test:e2e": "playwright install chromium && playwright test",
+		"test:e2e": "playwright install chromium && node scripts/run-e2e.mjs",
 		"gen": "wrangler types"
 	},
 	"devDependencies": {

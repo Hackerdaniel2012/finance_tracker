@@ -6,12 +6,13 @@ import {
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
-import { createAccount } from '../accounts/repository';
+import { createAccount, createProfile } from '../accounts/repository';
 import { createContract } from '../contracts/repository';
 import type { DbClient } from '../db-client';
 import { createPlannedIncome, createPlannedPayment } from '../planned-cashflow/repository';
 import {
 	getBalanceBeforeSalaryProjection,
+	getMonthCashflowReport,
 	getUpcomingIncome,
 	getUpcomingPayments
 } from './repository';
@@ -26,6 +27,85 @@ beforeEach(async () => {
 });
 
 describe('cashflow repository', () => {
+	it('combines month-to-date actuals with the remaining forecast', async () => {
+		const account = await createAccount(db, { name: 'Main Giro' });
+		const other = await createAccount(db, { name: 'Savings' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'dkb',
+			label: 'Main CSV'
+		});
+		const otherProfile = await createProfile(db, {
+			accountId: other.id,
+			bankId: 'n26',
+			label: 'Savings CSV'
+		});
+		await insertTransaction(profile.id, account.id, 'before-month', '2026-06-30', 99999);
+		await insertTransaction(profile.id, account.id, 'income', '2026-07-02', 200000);
+		await insertTransaction(profile.id, account.id, 'expense', '2026-07-08', -45000);
+		await insertTransaction(profile.id, account.id, 'future', '2026-07-09', -10000);
+		await insertTransaction(otherProfile.id, other.id, 'other-income', '2026-07-03', 30000);
+		await createPlannedPayment(db, {
+			accountId: account.id,
+			payee: 'Rent',
+			amountCents: 80000,
+			dueDate: '2026-07-20'
+		});
+		await createPlannedIncome(db, {
+			accountId: account.id,
+			payer: 'Employer',
+			amountCents: 250000,
+			dueDate: '2026-07-25'
+		});
+
+		await expect(
+			getMonthCashflowReport(db, {
+				asOf: '2026-07-08',
+				monthEnd: '2026-07-31',
+				nextSalaryDate: null,
+				accountId: account.id
+			})
+		).resolves.toMatchObject({
+			range: { from: '2026-07-01', asOf: '2026-07-08', to: '2026-07-31' },
+			actual: { incomeCents: 200000, expenseCents: -45000, netCents: 155000 },
+			forecast: { incomeCents: 250000, paymentCents: 80000, netCents: 170000 },
+			projectedNetCents: 325000,
+			upcomingPayments: [expect.objectContaining({ payee: 'Rent' })],
+			upcomingIncome: [expect.objectContaining({ payer: 'Employer' })]
+		});
+	});
+
+	it('returns zero actuals and forecast for an empty month', async () => {
+		await expect(
+			getMonthCashflowReport(db, {
+				asOf: '2026-07-08',
+				monthEnd: '2026-07-31',
+				nextSalaryDate: null
+			})
+		).resolves.toMatchObject({
+			actual: { incomeCents: 0, expenseCents: 0, netCents: 0 },
+			forecast: { incomeCents: 0, paymentCents: 0, netCents: 0 },
+			projectedNetCents: 0,
+			upcomingPayments: [],
+			upcomingIncome: []
+		});
+	});
+
+	it('includes planned, contract, and recurring items in the month forecast', async () => {
+		await seedCashflow();
+
+		await expect(
+			getMonthCashflowReport(db, {
+				asOf: '2026-07-08',
+				monthEnd: '2026-07-31',
+				nextSalaryDate: null
+			})
+		).resolves.toMatchObject({
+			forecast: { incomeCents: 525000, paymentCents: 95499, netCents: 429501 },
+			projectedNetCents: 429501
+		});
+	});
+
 	it('lists current-month upcoming payments and income', async () => {
 		await seedCashflow();
 
@@ -407,6 +487,23 @@ describe('cashflow repository', () => {
 		]);
 	});
 });
+
+async function insertTransaction(
+	profileId: string,
+	accountId: string,
+	id: string,
+	bookingDate: string,
+	amountCents: number
+) {
+	await db
+		.prepare(
+			`INSERT INTO transactions (
+				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text
+			) VALUES (?, ?, ?, ?, ?, ?, '')`
+		)
+		.bind(id, profileId, accountId, id, bookingDate, amountCents)
+		.run();
+}
 
 async function seedCashflow() {
 	const account = await createAccount(db, {

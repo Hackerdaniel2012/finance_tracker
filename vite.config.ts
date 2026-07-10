@@ -5,6 +5,8 @@ import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-cloudflare';
 import { sveltekit } from '@sveltejs/kit/vite';
 
+const e2eD1PersistPath = process.env.E2E_D1_PERSIST_PATH;
+
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
@@ -14,7 +16,14 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter: adapter()
+			adapter: adapter({
+				platformProxy: e2eD1PersistPath
+					? {
+							persist: { path: e2eD1PersistPath },
+							remoteBindings: false
+						}
+					: undefined
+			})
 		}),
 		paraglideVitePlugin({
 			project: './project.inlang',
