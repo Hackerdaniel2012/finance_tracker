@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 import type {
 	DbAllResult,
@@ -23,6 +25,17 @@ export async function createTestDatabase(): Promise<Database> {
 
 export function applySql(db: Database, sql: string): void {
 	db.run(sql);
+}
+
+export async function applyMigrations(db: Database): Promise<void> {
+	const migrationFiles = [
+		'0001_initial_schema.sql',
+		'0002_seed_default_categories.sql',
+		'0003_add_transaction_subaccount.sql'
+	];
+	for (const file of migrationFiles) {
+		applySql(db, await readFile(resolve('migrations', file), 'utf8'));
+	}
 }
 
 export function tableNames(db: Database): string[] {

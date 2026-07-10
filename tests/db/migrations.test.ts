@@ -5,6 +5,7 @@ import { applySql, createTestDatabase, firstValue, indexNames, tableNames } from
 
 const initialMigrationPath = resolve('migrations/0001_initial_schema.sql');
 const seedCategoriesMigrationPath = resolve('migrations/0002_seed_default_categories.sql');
+const subaccountMigrationPath = resolve('migrations/0003_add_transaction_subaccount.sql');
 
 const expectedTables = [
 	'account_balance_snapshots',
@@ -158,5 +159,22 @@ describe('D1 migrations', () => {
 				"SELECT name FROM categories WHERE id = 'cat-unknown' AND type = 'unknown' AND is_default = 1"
 			)
 		).toBe('Unknown');
+	});
+
+	it('adds a nullable subaccount column to transactions with an account index', async () => {
+		const db = await createTestDatabase();
+		const initialMigration = await readFile(initialMigrationPath, 'utf8');
+		const subaccountMigration = await readFile(subaccountMigrationPath, 'utf8');
+
+		applySql(db, initialMigration);
+		applySql(db, subaccountMigration);
+
+		expect(
+			firstValue<number>(
+				db,
+				"SELECT COUNT(*) FROM pragma_table_info('transactions') WHERE name = 'subaccount'"
+			)
+		).toBe(1);
+		expect(indexNames(db)).toEqual(expect.arrayContaining(['idx_transactions_account_subaccount']));
 	});
 });
