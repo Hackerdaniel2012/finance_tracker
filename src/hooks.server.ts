@@ -14,4 +14,20 @@ const handleParaglide: Handle = ({ event, resolve }) =>
 		});
 	});
 
-export const handle: Handle = handleParaglide;
+export const handle: Handle = async (input) => {
+	try {
+		return await handleParaglide(input);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (
+			input.event.url.pathname.startsWith('/api/') &&
+			/SQLITE_BUSY|database is locked/i.test(message)
+		) {
+			return new Response(JSON.stringify({ error: 'Database is temporarily busy' }), {
+				status: 503,
+				headers: { 'content-type': 'application/json', 'retry-after': '1' }
+			});
+		}
+		throw error;
+	}
+};
