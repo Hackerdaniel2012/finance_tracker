@@ -15,9 +15,10 @@ export async function getSummaryReport(
 	options?: SummaryReportOptions
 ): Promise<SummaryReport> {
 	const { accountId, subaccount } = options ?? {};
-	const [totals, byCategory, byAccount, recentTransactions] = await Promise.all([
+	const [totals, byCategory, byMonthCategory, byAccount, recentTransactions] = await Promise.all([
 		getSummaryTotals(db, range, accountId, subaccount),
 		getSummaryByCategory(db, range, accountId, subaccount),
+		getSummaryByMonthCategory(db, range, accountId, subaccount),
 		getSummaryByAccount(db, range, accountId, subaccount),
 		getRecentTransactions(db, range, accountId, subaccount)
 	]);
@@ -26,9 +27,47 @@ export async function getSummaryReport(
 		range,
 		totals,
 		byCategory,
+		byMonthCategory,
 		byAccount,
 		recentTransactions
 	};
+}
+
+async function getSummaryByMonthCategory(
+	db: DbClient,
+	range: ReportDateRange,
+	accountId?: string,
+	subaccount?: string
+): Promise<SummaryReport['byMonthCategory']> {
+	const accountClause = accountId ? 'AND t.account_id = ?' : '';
+	const subaccountClause = subaccount ? 'AND t.subaccount = ?' : '';
+	const { results } = await db
+		.prepare(
+			`SELECT strftime('%Y-%m', t.booking_date) AS month,
+				t.category_id,
+				COALESCE(c.name, 'Unknown') AS category_name,
+				-COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN t.amount_cents ELSE 0 END), 0) AS expense_cents
+			FROM transactions t
+			LEFT JOIN categories c ON c.id = t.category_id
+			WHERE t.booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}
+			GROUP BY month, t.category_id, c.name
+			HAVING expense_cents > 0
+			ORDER BY month ASC, expense_cents DESC, category_name ASC`
+		)
+		.bind(
+			range.from,
+			range.to,
+			...(accountId ? [accountId] : []),
+			...(subaccount ? [subaccount] : [])
+		)
+		.all<MonthlyCategorySummaryRow>();
+
+	return results.map((row) => ({
+		month: row.month,
+		categoryId: row.category_id,
+		categoryName: row.category_name,
+		expenseCents: row.expense_cents
+	}));
 }
 
 export async function getNetWorthReport(
@@ -654,6 +693,13 @@ interface CategorySummaryRow extends DbRow {
 	income_cents: number;
 	net_cents: number;
 	transaction_count: number;
+}
+
+interface MonthlyCategorySummaryRow extends DbRow {
+	month: string;
+	category_id: string | null;
+	category_name: string;
+	expense_cents: number;
 }
 
 interface AccountSummaryRow extends DbRow {

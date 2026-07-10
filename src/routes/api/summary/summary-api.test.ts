@@ -71,6 +71,52 @@ describe('/api/summary', () => {
 		});
 	});
 
+	it('returns expense totals grouped by month and category', async () => {
+		const account = await createAccount(db, { name: 'Monthly account' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'Monthly CSV'
+		});
+		const csv = n26Csv([
+			'2026-05-08,,Market,DE,"Debit Transfer",Groceries,"Hauptkonto",-10.00,,,',
+			'2026-06-08,,Market,DE,"Debit Transfer",Groceries,"Hauptkonto",-20.00,,,',
+			'2026-06-09,,Cafe,DE,"Debit Transfer",Coffee,"Hauptkonto",-4.00,,,',
+			'2026-07-08,,Market,DE,"Debit Transfer",Groceries,"Hauptkonto",-30.00,,,',
+			'2026-07-09,,Cafe,DE,"Debit Transfer",Coffee,"Hauptkonto",-5.00,,,',
+			'2026-07-10,,Refund,DE,"Credit Transfer",Groceries,"Hauptkonto",5.00,,,'
+		]);
+		await confirmImport(db, {
+			profileId: profile.id,
+			csv,
+			expectedHash: await sha256Hex(csv)
+		});
+		await db
+			.prepare(
+				"UPDATE transactions SET category_id = 'cat-groceries' WHERE account_id = ? AND payee = 'Market'"
+			)
+			.bind(account.id)
+			.run();
+
+		const response = await GET(
+			event(
+				`http://localhost/api/summary?from=2026-05-01&to=2026-07-31&accountId=${account.id}&subaccount=Hauptkonto`
+			)
+		);
+
+		await expect(response.json()).resolves.toMatchObject({
+			summary: {
+				byMonthCategory: [
+					{ month: '2026-05', categoryName: 'Groceries', expenseCents: 1000 },
+					{ month: '2026-06', categoryName: 'Groceries', expenseCents: 2000 },
+					{ month: '2026-06', categoryName: 'Unknown', expenseCents: 400 },
+					{ month: '2026-07', categoryName: 'Groceries', expenseCents: 3000 },
+					{ month: '2026-07', categoryName: 'Unknown', expenseCents: 500 }
+				]
+			}
+		});
+	});
+
 	it('returns validation errors for invalid ranges', async () => {
 		const response = await GET(event('http://localhost/api/summary?from=2026-08-01&to=2026-07-01'));
 

@@ -41,6 +41,12 @@ export interface SummaryReport {
 		netCents: number;
 		transactionCount: number;
 	}>;
+	byMonthCategory: Array<{
+		month: string;
+		categoryId: string | null;
+		categoryName: string;
+		expenseCents: number;
+	}>;
 	byAccount: Array<{
 		accountId: string;
 		accountName: string;

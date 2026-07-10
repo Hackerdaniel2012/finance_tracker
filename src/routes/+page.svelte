@@ -38,6 +38,12 @@
 			netCents: number;
 			transactionCount: number;
 		}>;
+		byMonthCategory: Array<{
+			month: string;
+			categoryId: string | null;
+			categoryName: string;
+			expenseCents: number;
+		}>;
 		recentTransactions: Array<{
 			id: string;
 			accountName: string;
@@ -69,29 +75,14 @@
 		nextIncome: UpcomingIncome | null;
 	}
 
-	const bankOptions: Array<{ id: BankId; label: string }> = [
-		{ id: 'dkb', label: 'DKB' },
-		{ id: 'n26', label: 'N26' },
-		{ id: 'trade_republic', label: 'Trade Republic' }
-	];
-
 	let accounts = $state<AccountWithProfile[]>([]);
 	let summary = $state<SummaryReport | null>(null);
 	let netWorth = $state<NetWorthReport | null>(null);
 	let monthCashflow = $state<MonthCashflowReport | null>(null);
 	let projection = $state<BalanceProjection | null>(null);
-	let status = $state(m.setup_status_loading());
 	let dashboardStatus = $state(m.dashboard_status_loading());
-	let error = $state<string | null>(null);
 	let dashboardError = $state<string | null>(null);
-	let accountName = $state('');
-	let institution = $state('');
-	let openingBalance = $state('0.00');
-	let profileAccountId = $state('');
-	let profileLabel = $state('');
-	let profileBankId = $state<BankId>('dkb');
 	let dashboardAccountScope = $state('');
-	let isSaving = $state(false);
 
 	const netWorthPoints = $derived(
 		netWorth?.points.map((point) => ({
@@ -103,15 +94,40 @@
 		netWorth?.accounts.reduce((sum, account) => sum + account.balanceCents, 0) ??
 			accounts.reduce((sum, account) => sum + account.balanceCents, 0)
 	);
-	const expenseCategoryPoints = $derived(
-		(summary?.byCategory ?? [])
-			.filter((category) => category.expenseCents > 0)
-			.slice(0, 8)
-			.map((category) => ({
-				category: category.categoryName,
-				knownExpense: category.categoryId ? category.expenseCents / 100 : 0,
-				unknownExpense: category.categoryId ? 0 : category.expenseCents / 100
+	const expenseMonths = $derived.by(() => {
+		const end = summary?.range.to ? new Date(`${summary.range.to}T00:00:00Z`) : new Date();
+		return Array.from({ length: 3 }, (_, index) => {
+			const date = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - (2 - index), 1));
+			return {
+				month: date.toISOString().slice(0, 7),
+				label: date.toLocaleDateString(undefined, {
+					month: 'short',
+					year: 'numeric',
+					timeZone: 'UTC'
+				})
+			};
+		});
+	});
+	const expenseCategoryPoints = $derived.by(() => {
+		const rows = summary?.byMonthCategory ?? [];
+		const categories = [...new Set(rows.map((row) => row.categoryName))];
+		return expenseMonths.map((month) => ({
+			...month,
+			categories: categories.map((category) => ({
+				category,
+				expense:
+					(rows.find((row) => row.month === month.month && row.categoryName === category)
+						?.expenseCents ?? 0) / 100
 			}))
+		}));
+	});
+	const expenseYAxisMax = $derived(
+		Math.max(
+			1,
+			...expenseCategoryPoints.flatMap((month) =>
+				month.categories.map((category) => category.expense)
+			)
+		)
 	);
 
 	onMount(() => {
@@ -124,17 +140,11 @@
 	}
 
 	async function loadAccounts() {
-		status = m.setup_status_loading();
-		error = null;
-
 		try {
 			const payload = await fetchJson<{ accounts: AccountWithProfile[] }>('/api/accounts');
 			accounts = payload.accounts;
-			profileAccountId = profileAccountId || payload.accounts[0]?.id || '';
-			status = m.setup_status_ready();
 		} catch {
-			status = m.setup_status_error();
-			error = m.setup_status_error();
+			accounts = [];
 		}
 	}
 
@@ -164,70 +174,8 @@
 		}
 	}
 
-	async function createAccount(event: SubmitEvent) {
-		event.preventDefault();
-		isSaving = true;
-		error = null;
-
-		try {
-			await fetchJson('/api/accounts', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					name: accountName,
-					institution: institution || null,
-					openingBalanceCents: eurosToCents(openingBalance)
-				})
-			});
-
-			accountName = '';
-			institution = '';
-			openingBalance = '0.00';
-			status = m.setup_status_saved();
-			await loadHomeState();
-		} catch {
-			status = m.setup_status_error();
-			error = m.setup_status_error();
-		} finally {
-			isSaving = false;
-		}
-	}
-
-	async function createProfile(event: SubmitEvent) {
-		event.preventDefault();
-		isSaving = true;
-		error = null;
-
-		try {
-			await fetchJson('/api/profiles', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					accountId: profileAccountId,
-					bankId: profileBankId,
-					label: profileLabel
-				})
-			});
-
-			profileLabel = '';
-			status = m.setup_status_saved();
-			await loadAccounts();
-		} catch {
-			status = m.setup_status_error();
-			error = m.setup_status_error();
-		} finally {
-			isSaving = false;
-		}
-	}
-
 	async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
 		return fetchJsonWithRetry<T>(url, init);
-	}
-
-	function eurosToCents(value: string): number {
-		const normalized = value.trim().replace(',', '.');
-		const parsed = Number.parseFloat(normalized);
-		return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
 	}
 
 	function centsToEuros(value: number): string {
@@ -239,13 +187,6 @@
 
 	function buildDashboardReportQuery(): string {
 		return dashboardAccountScope ? buildAccountScopeQuery(dashboardAccountScope) : '';
-	}
-
-	function getAccountBalanceCents(account: AccountWithProfile): number {
-		return (
-			netWorth?.accounts.find((balance) => balance.accountId === account.id)?.balanceCents ??
-			account.balanceCents
-		);
 	}
 
 	function formatDate(value: string | null): string {
@@ -262,8 +203,8 @@
 	<meta name="description" content={m.app_subtitle()} />
 </svelte:head>
 
-<main class="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:py-8">
-	<section class="space-y-5 lg:col-span-2">
+<main class="mx-auto max-w-7xl px-4 py-6 lg:py-8">
+	<section class="space-y-5">
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 			<div>
 				<h1 class="text-3xl font-semibold tracking-normal text-zinc-950 sm:text-4xl">
@@ -364,28 +305,33 @@
 			<div>
 				<h2 class="text-lg font-semibold text-zinc-950">{m.expenses_by_category()}</h2>
 				<p class="mt-1 text-sm text-zinc-500">
-					{summary?.range.from ?? ''} – {summary?.range.to ?? ''}
+					{expenseMonths[0]?.label} – {expenseMonths[2]?.label}
 				</p>
 			</div>
-			<div class="mt-5 h-72">
-				{#if expenseCategoryPoints.length > 0}
-					<BarChart
-						data={expenseCategoryPoints}
-						x="knownExpense"
-						y="category"
-						orientation="horizontal"
-						axis
-						grid
-						seriesLayout="stack"
-						series={[
-							{ key: 'known', value: 'knownExpense', color: '#047857' },
-							{ key: 'unknown', value: 'unknownExpense', color: '#d97706' }
-						]}
-						class="h-full w-full"
-					/>
-				{:else}
-					<p class="text-sm text-zinc-500">{m.no_chart_data()}</p>
-				{/if}
+			<div class="mt-5 grid gap-4 md:grid-cols-3">
+				{#each expenseCategoryPoints as month, monthIndex (month.month)}
+					<article class="min-w-0 rounded bg-zinc-50 p-3">
+						<h3 class="font-medium text-zinc-950">{month.label}</h3>
+						<div class="mt-3 h-64">
+							{#if month.categories.some((category) => category.expense > 0)}
+								<BarChart
+									data={month.categories}
+									x="category"
+									y="expense"
+									yDomain={[0, expenseYAxisMax]}
+									axis={monthIndex === 0 ? true : 'x'}
+									grid
+									series={[{ key: 'expense', value: 'expense', color: '#047857' }]}
+									class="h-full w-full"
+								/>
+							{:else}
+								<div class="flex h-full items-center justify-center">
+									<p class="text-sm text-zinc-500">{m.no_chart_data()}</p>
+								</div>
+							{/if}
+						</div>
+					</article>
+				{/each}
 			</div>
 		</section>
 
@@ -498,105 +444,4 @@
 			</article>
 		</section>
 	</section>
-
-	<aside class="space-y-6">
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
-			<div class="flex items-center justify-between gap-4">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.setup_title()}</h2>
-				<p class="text-sm text-zinc-500">{status}</p>
-			</div>
-
-			<form class="mt-5 grid gap-4" onsubmit={createAccount}>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.account_name()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={accountName} required />
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.institution()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={institution} />
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.opening_balance()}</span>
-					<input
-						class="w-full rounded border-zinc-300"
-						inputmode="decimal"
-						bind:value={openingBalance}
-					/>
-				</label>
-				<button
-					class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-					type="submit"
-					disabled={isSaving}
-				>
-					{m.create_account()}
-				</button>
-			</form>
-
-			<form class="mt-8 grid gap-4 border-t border-zinc-200 pt-5" onsubmit={createProfile}>
-				<h3 class="text-base font-semibold text-zinc-950">{m.profile_title()}</h3>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.account()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={profileAccountId} required>
-						<option value="">{m.required()}</option>
-						{#each accounts as account (account.id)}
-							<option value={account.id}>{account.name}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.bank()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={profileBankId}>
-						{#each bankOptions as bank (bank.id)}
-							<option value={bank.id}>{bank.label}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.profile_label()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={profileLabel} required />
-				</label>
-				<button
-					class="rounded border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-950 disabled:opacity-50"
-					type="submit"
-					disabled={isSaving || accounts.length === 0}
-				>
-					{m.create_profile()}
-				</button>
-			</form>
-
-			{#if error}
-				<p class="mt-4 text-sm text-red-700">{error}</p>
-			{/if}
-		</section>
-
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
-			<h2 class="text-lg font-semibold text-zinc-950">{m.accounts()}</h2>
-			<div class="mt-5 divide-y divide-zinc-200">
-				{#if accounts.length === 0}
-					<p class="py-4 text-sm text-zinc-500">{m.no_accounts()}</p>
-				{:else}
-					{#each accounts as account (account.id)}
-						<article class="py-4">
-							<div class="flex items-start justify-between gap-4">
-								<div>
-									<h3 class="text-base font-semibold text-zinc-950">{account.name}</h3>
-									<p class="mt-1 text-sm text-zinc-600">
-										{account.institution || m.institution()} / {centsToEuros(
-											getAccountBalanceCents(account)
-										)}
-									</p>
-								</div>
-								<p class="text-right text-sm text-zinc-600">
-									{account.profile ? account.profile.label : m.no_profile()}
-								</p>
-							</div>
-						</article>
-					{/each}
-				{/if}
-			</div>
-			<div class="mt-5 border-t border-zinc-200 pt-4">
-				<p class="text-sm leading-6 text-zinc-700">{m.privacy_note()}</p>
-			</div>
-		</section>
-	</aside>
 </main>
