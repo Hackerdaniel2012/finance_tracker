@@ -145,10 +145,6 @@
 		}
 	}
 
-	async function applyDashboardAccountFilter() {
-		await loadDashboard();
-	}
-
 	async function createAccount(event: SubmitEvent) {
 		event.preventDefault();
 		isSaving = true;
@@ -264,16 +260,14 @@
 			</div>
 			<div class="flex flex-col items-start gap-3 sm:items-end">
 				<p class="text-sm text-zinc-500">{dashboardStatus}</p>
-				<form
-					class="flex flex-col gap-2 sm:flex-row sm:items-end"
-					onsubmit={applyDashboardAccountFilter}
-				>
+				<div class="flex flex-col gap-2 sm:flex-row sm:items-end">
 					<label class="grid gap-1 text-sm font-medium text-zinc-700">
 						<span>{m.dashboard_account_scope()}</span>
 						<select
 							class="min-w-48 rounded border-zinc-300"
 							aria-label={m.dashboard_account_scope()}
 							bind:value={dashboardAccountScope}
+							onchange={() => loadDashboard()}
 						>
 							<option value="">{m.all_accounts()}</option>
 							{#each buildAccountScopeOptions(accounts) as option (option.value)}
@@ -281,13 +275,7 @@
 							{/each}
 						</select>
 					</label>
-					<button
-						class="rounded border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-950"
-						type="submit"
-					>
-						{m.apply_scope()}
-					</button>
-				</form>
+				</div>
 			</div>
 		</div>
 
