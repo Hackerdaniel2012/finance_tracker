@@ -1,6 +1,7 @@
 import { ValidationError } from '../accounts/errors';
 import type {
 	RecurringCadence,
+	RecurringDirection,
 	RecurringSource,
 	RecurringStatus,
 	UpdateRecurringGroupInput
@@ -15,6 +16,7 @@ const cadences = new Set<RecurringCadence>([
 ]);
 const statuses = new Set<RecurringStatus>(['suggested', 'confirmed', 'ignored']);
 const sources = new Set<RecurringSource>(['manual', 'imported', 'confirmed_suggestion']);
+const directions = new Set<RecurringDirection>(['incoming', 'outgoing']);
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseUpdateRecurringGroupInput(
@@ -29,6 +31,7 @@ export function parseUpdateRecurringGroupInput(
 	if ('categoryId' in body)
 		input.categoryId = optionalNullableString(body.categoryId, 'categoryId');
 	if ('payee' in body) input.payee = requiredString(body.payee, 'payee');
+	if ('direction' in body) input.direction = requiredDirection(body.direction);
 	if ('cadence' in body) input.cadence = requiredCadence(body.cadence);
 	if ('expectedAmountCents' in body) {
 		input.expectedAmountCents = requiredPositiveInteger(
@@ -44,8 +47,28 @@ export function parseUpdateRecurringGroupInput(
 	if (Object.keys(input).length === 1) {
 		throw new ValidationError('At least one recurring group field must be updated');
 	}
+	if (input.status === 'confirmed') {
+		if (
+			!input.direction ||
+			!input.categoryId ||
+			!input.cadence ||
+			!input.expectedAmountCents ||
+			!input.nextDate
+		) {
+			throw new ValidationError(
+				'Confirming a recurring group requires direction, categoryId, cadence, expectedAmountCents, and nextDate'
+			);
+		}
+	}
 
 	return input;
+}
+
+function requiredDirection(value: unknown): RecurringDirection {
+	if (typeof value !== 'string' || !directions.has(value as RecurringDirection)) {
+		throw new ValidationError('direction must be incoming or outgoing');
+	}
+	return value as RecurringDirection;
 }
 
 function asObject(value: unknown): Record<string, unknown> {

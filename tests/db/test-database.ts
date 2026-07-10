@@ -31,7 +31,8 @@ export async function applyMigrations(db: Database): Promise<void> {
 	const migrationFiles = [
 		'0001_initial_schema.sql',
 		'0002_seed_default_categories.sql',
-		'0003_add_transaction_subaccount.sql'
+		'0003_add_transaction_subaccount.sql',
+		'0004_recurring_detector_v2.sql'
 	];
 	for (const file of migrationFiles) {
 		applySql(db, await readFile(resolve('migrations', file), 'utf8'));

@@ -551,6 +551,37 @@ describe('cashflow repository', () => {
 			})
 		]);
 	});
+
+	it('keeps confirmed recurring income out of upcoming payments', async () => {
+		const account = await createAccount(db, { name: 'Main', openingBalanceCents: 100000 });
+		await insertRecurringPayment({
+			id: 'recurring-salary',
+			accountId: account.id,
+			categoryId: 'cat-salary',
+			payee: 'Employer',
+			direction: 'incoming',
+			cadence: 'monthly',
+			expectedAmountCents: 300000,
+			nextDate: '2026-07-25'
+		});
+
+		await expect(
+			getUpcomingPayments(db, {
+				asOf: '2026-07-08',
+				monthEnd: '2026-07-31',
+				nextSalaryDate: null
+			})
+		).resolves.toEqual([]);
+		await expect(
+			getUpcomingIncome(db, {
+				asOf: '2026-07-08',
+				monthEnd: '2026-07-31',
+				nextSalaryDate: null
+			})
+		).resolves.toEqual([
+			expect.objectContaining({ payer: 'Employer', amountCents: 300000, dueDate: '2026-07-25' })
+		]);
+	});
 });
 
 async function insertTransaction(
@@ -629,9 +660,9 @@ async function seedCashflow() {
 	await db
 		.prepare(
 			`INSERT INTO recurring_groups (
-				id, account_id, category_id, payee, cadence, expected_amount_cents,
+				id, account_id, category_id, payee, direction, cadence, expected_amount_cents,
 				next_date, status, confidence
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, 'outgoing', ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			'recurring-gym',
@@ -648,9 +679,9 @@ async function seedCashflow() {
 	await db
 		.prepare(
 			`INSERT INTO recurring_groups (
-				id, account_id, category_id, payee, cadence, expected_amount_cents,
+				id, account_id, category_id, payee, direction, cadence, expected_amount_cents,
 				next_date, status, confidence
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, 'outgoing', ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			'recurring-suggestion',
@@ -674,19 +705,21 @@ async function insertRecurringPayment(input: {
 	cadence: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
 	expectedAmountCents: number;
 	nextDate: string;
+	direction?: 'incoming' | 'outgoing';
 }) {
 	await db
 		.prepare(
 			`INSERT INTO recurring_groups (
-				id, account_id, category_id, payee, cadence, expected_amount_cents,
+				id, account_id, category_id, payee, direction, cadence, expected_amount_cents,
 				next_date, status, confidence
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			input.id,
 			input.accountId,
 			input.categoryId ?? null,
 			input.payee,
+			input.direction ?? 'outgoing',
 			input.cadence,
 			input.expectedAmountCents,
 			input.nextDate,

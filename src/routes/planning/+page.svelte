@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { onMount } from 'svelte';
 
 	type ContractKind = 'fixed_cost' | 'subscription' | 'salary' | 'income' | 'other';
@@ -90,14 +91,24 @@
 	interface RecurringGroup {
 		id: string;
 		accountName: string | null;
+		categoryId: string | null;
 		categoryName: string | null;
 		payee: string;
+		direction: 'incoming' | 'outgoing' | null;
 		cadence: ContractCadence;
 		expectedAmountCents: number;
 		nextDate: string | null;
 		status: RecurringStatus;
 		confidence: number;
+		confidenceFactors: { interval: number; amount: number; history: number; recency: number };
+		needsReview: boolean;
 		transactionCount: number;
+		evidence: Array<{
+			transactionId: string;
+			bookingDate: string;
+			amountCents: number;
+			payee: string | null;
+		}>;
 	}
 
 	interface UpcomingPayment {
@@ -146,6 +157,12 @@
 	let plannedIncome = $state<PlannedIncome[]>([]);
 	let liabilities = $state<Liability[]>([]);
 	let recurringGroups = $state<RecurringGroup[]>([]);
+	let selectedRecurring = $state<RecurringGroup | null>(null);
+	let recurringDirection = $state<'incoming' | 'outgoing'>('outgoing');
+	let recurringCategoryId = $state('');
+	let recurringCadence = $state<ContractCadence>('monthly');
+	let recurringAmount = $state('');
+	let recurringNextDate = $state(todayIso());
 	let upcomingPayments = $state<UpcomingPayment[]>([]);
 	let upcomingIncome = $state<UpcomingIncome[]>([]);
 	let projection = $state<BalanceProjection | null>(null);
@@ -615,6 +632,54 @@
 		}
 	}
 
+	async function refreshRecurringSuggestions() {
+		isUpdatingRecurring = true;
+		try {
+			await fetchJson('/api/recurring', { method: 'POST' });
+			await loadPlanningState();
+		} catch {
+			error = m.planning_status_error();
+		} finally {
+			isUpdatingRecurring = false;
+		}
+	}
+
+	function reviewRecurring(group: RecurringGroup) {
+		selectedRecurring = group;
+		recurringDirection = group.direction ?? 'outgoing';
+		recurringCategoryId = group.categoryId ?? '';
+		recurringCadence = group.cadence;
+		recurringAmount = String(group.expectedAmountCents / 100);
+		recurringNextDate = group.nextDate ?? todayIso();
+	}
+
+	async function confirmRecurring(event: SubmitEvent) {
+		event.preventDefault();
+		if (!selectedRecurring || !recurringCategoryId) return;
+		isUpdatingRecurring = true;
+		try {
+			await fetchJson(`/api/recurring/${selectedRecurring.id}`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					status: 'confirmed',
+					direction: recurringDirection,
+					categoryId: recurringCategoryId,
+					cadence: recurringCadence,
+					expectedAmountCents: eurosToCents(recurringAmount),
+					nextDate: recurringNextDate
+				})
+			});
+			selectedRecurring = null;
+			status = m.planning_status_saved();
+			await loadPlanningState();
+		} catch {
+			error = m.planning_status_error();
+		} finally {
+			isUpdatingRecurring = false;
+		}
+	}
+
 	async function patchAndReload(url: string, body: Record<string, string>) {
 		error = null;
 		try {
@@ -632,12 +697,7 @@
 	}
 
 	async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
-		const response = await fetch(url, init);
-		if (!response.ok) {
-			throw new Error(await response.text());
-		}
-
-		return (await response.json()) as T;
+		return fetchJsonWithRetry<T>(url, init);
 	}
 
 	function balanceBeforeSalaryUrl(): string {
@@ -1522,9 +1582,87 @@
 
 	<section class="grid gap-6 xl:grid-cols-3">
 		<section class="rounded border border-zinc-200 bg-white shadow-sm xl:col-span-2">
-			<div class="border-b border-zinc-200 p-5">
+			<div class="flex items-center justify-between gap-3 border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.recurring_title()}</h2>
+				<button
+					class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+					type="button"
+					disabled={isUpdatingRecurring}
+					onclick={refreshRecurringSuggestions}>{m.refresh_suggestions()}</button
+				>
 			</div>
+			{#if selectedRecurring}
+				<form
+					class="grid gap-4 border-b border-zinc-200 bg-amber-50 p-5"
+					onsubmit={confirmRecurring}
+				>
+					<div>
+						<h3 class="font-semibold text-zinc-950">
+							{m.review_recurring({ payee: selectedRecurring.payee })}
+						</h3>
+						<p class="mt-1 text-sm text-zinc-600">
+							Confidence {selectedRecurring.confidence}% · interval {selectedRecurring
+								.confidenceFactors.interval}/40 · amount {selectedRecurring.confidenceFactors
+								.amount}/30 · history {selectedRecurring.confidenceFactors.history}/20 · recency {selectedRecurring
+								.confidenceFactors.recency}/10
+						</p>
+					</div>
+					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+						<label class="grid gap-1 text-sm"
+							><span>{m.direction()}</span><select bind:value={recurringDirection}
+								><option value="outgoing">{m.outgoing()}</option><option value="incoming"
+									>{m.incoming()}</option
+								></select
+							></label
+						>
+						<label class="grid gap-1 text-sm"
+							><span>{m.category()}</span><select bind:value={recurringCategoryId} required
+								><option value="" disabled>{m.select_category()}</option
+								>{#each categories.filter( (category) => (recurringDirection === 'incoming' ? category.type === 'income' : category.type !== 'income' && category.type !== 'transfer') ) as category (category.id)}<option
+										value={category.id}>{category.name}</option
+									>{/each}</select
+							></label
+						>
+						<label class="grid gap-1 text-sm"
+							><span>{m.cadence()}</span><select bind:value={recurringCadence}
+								>{#each cadences as cadence (cadence)}<option value={cadence}
+										>{cadenceLabel(cadence)}</option
+									>{/each}</select
+							></label
+						>
+						<label class="grid gap-1 text-sm"
+							><span>{m.amount()}</span><input bind:value={recurringAmount} required /></label
+						>
+						<label class="grid gap-1 text-sm"
+							><span>{m.next_date()}</span><input
+								type="date"
+								bind:value={recurringNextDate}
+								required
+							/></label
+						>
+					</div>
+					<div class="rounded border border-amber-200 bg-white p-3">
+						<p class="text-sm font-medium text-zinc-700">{m.supporting_transactions()}</p>
+						{#each selectedRecurring.evidence as item (item.transactionId)}<div
+								class="mt-2 flex justify-between gap-3 text-sm"
+							>
+								<span>{formatDate(item.bookingDate)} · {item.payee ?? selectedRecurring.payee}</span
+								><span>{centsToEuros(item.amountCents)}</span>
+							</div>{/each}
+					</div>
+					<div class="flex gap-2">
+						<button
+							class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white"
+							type="submit"
+							disabled={isUpdatingRecurring || !recurringCategoryId}>{m.confirm_recurring()}</button
+						><button
+							class="rounded border border-zinc-300 px-4 py-2 text-sm"
+							type="button"
+							onclick={() => (selectedRecurring = null)}>{m.cancel()}</button
+						>
+					</div>
+				</form>
+			{/if}
 			<div class="divide-y divide-zinc-100">
 				{#each recurringGroups as group (group.id)}
 					<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
@@ -1544,7 +1682,7 @@
 									class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
 									type="button"
 									disabled={group.status === 'confirmed' || isUpdatingRecurring}
-									onclick={() => updateRecurringStatus(group, 'confirmed')}
+									onclick={() => reviewRecurring(group)}
 								>
 									{m.confirm_recurring()}
 								</button>

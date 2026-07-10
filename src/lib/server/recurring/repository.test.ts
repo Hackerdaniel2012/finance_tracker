@@ -63,7 +63,7 @@ describe('recurring repository', () => {
 			status: 'confirmed',
 			confidence: 100,
 			source: 'confirmed_suggestion',
-			nextDate: null
+			nextDate: '2026-07-31'
 		});
 
 		expect(updated).toMatchObject({
@@ -74,7 +74,7 @@ describe('recurring repository', () => {
 			status: 'confirmed',
 			confidence: 100,
 			source: 'confirmed_suggestion',
-			nextDate: null
+			nextDate: '2026-07-31'
 		});
 	});
 
@@ -173,7 +173,7 @@ describe('recurring repository', () => {
 				expect.objectContaining({
 					payee: 'Weekly News',
 					cadence: 'weekly',
-					nextDate: '2026-06-22'
+					nextDate: '2026-07-13'
 				}),
 				expect.objectContaining({
 					payee: 'Biweekly Cleaning',
@@ -245,6 +245,34 @@ describe('recurring repository', () => {
 
 		await expect(generateRecurringSuggestions(db)).resolves.toEqual([]);
 	});
+
+	it('excludes paired internal transfers from recurring suggestions', async () => {
+		const account = await createAccount(db, { name: 'Main Giro' });
+		const profile = await createProfile(db, {
+			accountId: account.id,
+			bankId: 'n26',
+			label: 'Main'
+		});
+		for (const bookingDate of ['2026-04-01', '2026-05-01', '2026-06-01']) {
+			await insertTransaction({
+				accountId: account.id,
+				profileId: profile.id,
+				categoryId: 'cat-unknown',
+				payee: 'Savings',
+				bookingDate,
+				amountCents: -10000
+			});
+			await insertTransaction({
+				accountId: account.id,
+				profileId: profile.id,
+				categoryId: 'cat-unknown',
+				payee: 'Main',
+				bookingDate,
+				amountCents: 10000
+			});
+		}
+		await expect(generateRecurringSuggestions(db)).resolves.toEqual([]);
+	});
 });
 
 async function insertRecurringGroup(input: {
@@ -255,20 +283,24 @@ async function insertRecurringGroup(input: {
 	expectedAmountCents?: number;
 	nextDate?: string | null;
 	confidence?: number;
+	categoryId?: string | null;
+	direction?: 'incoming' | 'outgoing' | null;
 }): Promise<string> {
 	const id = crypto.randomUUID();
 	await db
 		.prepare(
 			`INSERT INTO recurring_groups (
-				id, account_id, profile_id, payee, cadence, expected_amount_cents,
-				next_date, confidence
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+				id, account_id, profile_id, category_id, payee, direction, cadence,
+				expected_amount_cents, next_date, confidence
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
 			input.accountId ?? null,
 			input.profileId ?? null,
+			input.categoryId === undefined ? 'cat-utilities' : input.categoryId,
 			input.payee,
+			input.direction === undefined ? 'outgoing' : input.direction,
 			input.cadence ?? 'monthly',
 			input.expectedAmountCents ?? 1000,
 			input.nextDate ?? '2026-07-31',

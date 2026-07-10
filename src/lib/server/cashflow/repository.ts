@@ -76,12 +76,13 @@ export async function getUpcomingIncome(
 	db: DbClient,
 	window: CashflowWindow
 ): Promise<UpcomingIncome[]> {
-	const [plannedIncome, contractIncome] = await Promise.all([
+	const [plannedIncome, contractIncome, recurringIncome] = await Promise.all([
 		getPlannedIncome(db, window),
-		getContractIncome(db, window)
+		getContractIncome(db, window),
+		getRecurringIncome(db, window)
 	]);
 
-	return [...plannedIncome, ...contractIncome].sort(compareIncome);
+	return [...plannedIncome, ...contractIncome, ...recurringIncome].sort(compareIncome);
 }
 
 export async function getBalanceBeforeSalaryProjection(
@@ -186,15 +187,34 @@ async function getRecurringPayments(
 		.prepare(
 			`${recurringPaymentSelect()}
 			WHERE rg.status = 'confirmed'
+				AND rg.direction = 'outgoing'
+				AND rg.needs_review = 0
 				AND rg.next_date IS NOT NULL
 				AND rg.next_date <= ?
-				AND COALESCE(c.type, 'expense') != 'income'
 				${accountClause}`
 		)
 		.bind(window.monthEnd, ...(window.accountId ? [window.accountId] : []))
 		.all<RecurringPaymentRow>();
 
 	return results.flatMap((row) => expandRecurringPayment(row, window.asOf, window.monthEnd));
+}
+
+async function getRecurringIncome(db: DbClient, window: CashflowWindow): Promise<UpcomingIncome[]> {
+	const accountClause = window.accountId ? 'AND rg.account_id = ?' : '';
+	const { results } = await db
+		.prepare(
+			`${recurringIncomeSelect()}
+			WHERE rg.status = 'confirmed'
+				AND rg.direction = 'incoming'
+				AND rg.needs_review = 0
+				AND c.type = 'income'
+				AND rg.next_date IS NOT NULL
+				AND rg.next_date <= ?
+				${accountClause}`
+		)
+		.bind(window.monthEnd, ...(window.accountId ? [window.accountId] : []))
+		.all<RecurringIncomeRow>();
+	return results.flatMap((row) => expandRecurringIncome(row, window.asOf, window.monthEnd));
 }
 
 async function getContractIncome(db: DbClient, window: CashflowWindow): Promise<UpcomingIncome[]> {
@@ -214,8 +234,11 @@ async function getContractIncome(db: DbClient, window: CashflowWindow): Promise<
 }
 
 async function getNextIncome(db: DbClient, window: CashflowWindow): Promise<UpcomingIncome | null> {
-	const [nextIncome] = await getContractIncome(db, window);
-	return nextIncome ?? null;
+	const [contractIncome, recurringIncome] = await Promise.all([
+		getContractIncome(db, window),
+		getRecurringIncome(db, window)
+	]);
+	return [...contractIncome, ...recurringIncome].sort(compareIncome)[0] ?? null;
 }
 
 async function getPaymentsThroughDate(
@@ -318,6 +341,16 @@ function recurringPaymentSelect(): string {
 	LEFT JOIN categories c ON c.id = rg.category_id`;
 }
 
+function recurringIncomeSelect(): string {
+	return `SELECT
+		rg.id, rg.account_id, a.name AS account_name, rg.category_id, c.name AS category_name,
+		rg.payee AS payer, rg.cadence, rg.expected_amount_cents AS amount_cents,
+		rg.next_date AS due_date
+	FROM recurring_groups rg
+	LEFT JOIN accounts a ON a.id = rg.account_id
+	LEFT JOIN categories c ON c.id = rg.category_id`;
+}
+
 function contractIncomeSelect(): string {
 	return `SELECT
 		c.id, c.account_id, a.name AS account_name, c.category_id, cat.name AS category_name,
@@ -406,6 +439,31 @@ function expandRecurringPayment(
 	}
 
 	return payments;
+}
+
+function expandRecurringIncome(
+	row: RecurringIncomeRow,
+	from: string,
+	to: string
+): UpcomingIncome[] {
+	const income: UpcomingIncome[] = [];
+	let dueDate = row.due_date;
+	while (dueDate < from) dueDate = nextCadenceDate(dueDate, row.cadence);
+	while (dueDate <= to) {
+		income.push({
+			id: `${row.id}:${dueDate}`,
+			accountId: row.account_id,
+			accountName: row.account_name,
+			categoryId: row.category_id,
+			categoryName: row.category_name,
+			payer: row.payer,
+			amountCents: row.amount_cents,
+			dueDate,
+			note: null
+		});
+		dueDate = nextCadenceDate(dueDate, row.cadence);
+	}
+	return income;
 }
 
 function mapContractIncome(row: ContractIncomeRow): UpcomingIncome {
@@ -528,6 +586,18 @@ interface RecurringPaymentRow extends DbRow {
 	category_id: string | null;
 	category_name: string | null;
 	payee: string;
+	cadence: RecurringCadence;
+	amount_cents: number;
+	due_date: string;
+}
+
+interface RecurringIncomeRow extends DbRow {
+	id: string;
+	account_id: string | null;
+	account_name: string | null;
+	category_id: string | null;
+	category_name: string | null;
+	payer: string;
 	cadence: RecurringCadence;
 	amount_cents: number;
 	due_date: string;

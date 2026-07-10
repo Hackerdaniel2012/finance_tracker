@@ -6,6 +6,7 @@ import { applySql, createTestDatabase, firstValue, indexNames, tableNames } from
 const initialMigrationPath = resolve('migrations/0001_initial_schema.sql');
 const seedCategoriesMigrationPath = resolve('migrations/0002_seed_default_categories.sql');
 const subaccountMigrationPath = resolve('migrations/0003_add_transaction_subaccount.sql');
+const recurringV2MigrationPath = resolve('migrations/0004_recurring_detector_v2.sql');
 
 const expectedTables = [
 	'account_balance_snapshots',
@@ -176,5 +177,38 @@ describe('D1 migrations', () => {
 			)
 		).toBe(1);
 		expect(indexNames(db)).toEqual(expect.arrayContaining(['idx_transactions_account_subaccount']));
+	});
+
+	it('backfills recurring direction, quarantines ambiguous confirmations, and removes suggestions', async () => {
+		const db = await createTestDatabase();
+		applySql(db, await readFile(initialMigrationPath, 'utf8'));
+		db.run("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main')");
+		db.run(
+			"INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES ('profile-1', 'account-1', 'n26', 'Main')"
+		);
+		db.run(
+			"INSERT INTO transactions (id, profile_id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text) VALUES ('txn-1', 'profile-1', 'account-1', 'one', '2026-06-01', -5000, 'Power Co', 'power')"
+		);
+		db.run(
+			"INSERT INTO recurring_groups (id, account_id, payee, cadence, expected_amount_cents, status, confidence) VALUES ('confirmed-1', 'account-1', 'Power Co', 'monthly', 5000, 'confirmed', 90), ('suggested-1', 'account-1', 'Gym', 'monthly', 2000, 'suggested', 80), ('ignored-1', 'account-1', 'Old Service', 'monthly', 1000, 'ignored', 70)"
+		);
+		db.run(
+			"INSERT INTO recurring_group_transactions (recurring_group_id, transaction_id) VALUES ('confirmed-1', 'txn-1')"
+		);
+
+		applySql(db, await readFile(recurringV2MigrationPath, 'utf8'));
+
+		expect(
+			firstValue<number>(db, "SELECT COUNT(*) FROM recurring_groups WHERE id = 'suggested-1'")
+		).toBe(0);
+		expect(
+			firstValue<string>(db, "SELECT direction FROM recurring_groups WHERE id = 'confirmed-1'")
+		).toBe('outgoing');
+		expect(
+			firstValue<number>(db, "SELECT needs_review FROM recurring_groups WHERE id = 'confirmed-1'")
+		).toBe(1);
+		expect(
+			firstValue<number>(db, "SELECT COUNT(*) FROM recurring_groups WHERE id = 'ignored-1'")
+		).toBe(1);
 	});
 });

@@ -19,7 +19,17 @@ describe('/api/recurring/:id', () => {
 	it('updates recurring groups', async () => {
 		const id = await insertRecurringGroup();
 
-		const response = await PATCH(event(id, { status: 'confirmed', confidence: 100 }));
+		const response = await PATCH(
+			event(id, {
+				status: 'confirmed',
+				confidence: 100,
+				direction: 'outgoing',
+				categoryId: 'cat-housing',
+				cadence: 'monthly',
+				expectedAmountCents: 90000,
+				nextDate: '2026-07-31'
+			})
+		);
 
 		await expect(response.json()).resolves.toMatchObject({
 			recurringGroup: { id, status: 'confirmed', confidence: 100 }
