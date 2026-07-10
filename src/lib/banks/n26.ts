@@ -108,7 +108,8 @@ export const n26Adapter: BankAdapter = {
 				source: {
 					bankId: 'n26',
 					rowNumber: record.rowNumber,
-					rawType: record.values.Type
+					rawType: record.values.Type,
+					subaccount: record.values['Account Name'] || undefined
 				}
 			});
 		}

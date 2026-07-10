@@ -251,8 +251,8 @@ function insertTransactionStatement(
 				id, profile_id, account_id, import_batch_id, category_id, dedupe_key,
 				booking_date, value_date, amount_cents, currency, original_amount_cents,
 				original_currency, exchange_rate, balance_after_cents, payee, description,
-				note, search_text, classification_status
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				note, search_text, classification_status, subaccount
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			input.transactionId,
@@ -273,7 +273,8 @@ function insertTransactionStatement(
 			input.row.description ?? null,
 			input.row.note ?? null,
 			input.row.searchText,
-			input.classificationStatus
+			input.classificationStatus,
+			input.row.source.subaccount ?? null
 		);
 }
 
