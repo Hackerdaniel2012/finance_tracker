@@ -127,40 +127,40 @@
 	</section>
 
 	<section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-		<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 			<p class="text-sm font-medium text-zinc-500">{m.account_balance()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">{centsToEuros(balanceCents)}</p>
 		</article>
-		<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 			<p class="text-sm font-medium text-zinc-500">{m.account_income()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">
 				{centsToEuros(data.summary.totals.incomeCents)}
 			</p>
 		</article>
-		<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 			<p class="text-sm font-medium text-zinc-500">{m.account_expenses()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">
 				{centsToEuros(data.summary.totals.expenseCents)}
 			</p>
 		</article>
-		<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 			<p class="text-sm font-medium text-zinc-500">{m.account_net()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">
 				{centsToEuros(data.summary.totals.netCents)}
 			</p>
 		</article>
-		<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 			<p class="text-sm font-medium text-zinc-500">{m.unknown_transactions()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">{data.summary.totals.unknownCount}</p>
 		</article>
 	</section>
 
-	<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+	<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 		<div class="flex items-center justify-between gap-4">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.account_balance_history()}</h2>
 			<p class="text-sm text-zinc-500">{data.history.range.from} – {data.history.range.to}</p>
 		</div>
-		<div class="mt-5 h-64">
+		<div class="mt-5 h-72 p-4">
 			{#if historyPoints.length > 0}
 				<LineChart
 					data={historyPoints}
@@ -174,7 +174,7 @@
 				/>
 			{:else}
 				<div
-					class="flex h-full items-center justify-center rounded border border-dashed border-zinc-300"
+					class="flex h-full items-center justify-center rounded-ui border border-dashed border-zinc-300"
 				>
 					<p class="text-sm text-zinc-500">{m.no_chart_data()}</p>
 				</div>
@@ -183,7 +183,7 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-2">
-		<article class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.recent_transactions()}</h2>
 			{#if recentError}
 				<p class="mt-4 text-sm text-red-700">{recentError}</p>
@@ -208,7 +208,7 @@
 			{/if}
 		</article>
 
-		<article class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<div class="flex items-center justify-between gap-3">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.category()}</h2>
 				<div class="flex rounded border border-zinc-300 p-1 text-xs font-medium">
@@ -229,7 +229,7 @@
 				</div>
 			</div>
 			{#if categoryPoints.length > 0}
-				<div class="mt-4 h-56">
+				<div class="mt-4 h-64 p-4">
 					<BarChart
 						data={categoryPoints}
 						x="knownAmount"

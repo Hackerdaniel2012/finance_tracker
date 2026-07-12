@@ -21,15 +21,15 @@ const requiredColumns = [
 ];
 
 export const dkbAdapter: BankAdapter = {
-	id: 'dkb',
-	label: 'DKB',
+	id: 'dkb_girocard',
+	label: 'DKB Giro Card',
 	status: 'enabled',
 	requiredColumns,
 	parse(csv) {
 		const headerRowIndex = findHeaderRow(csv, 'Buchungsdatum', ';');
 		if (headerRowIndex < 0) {
 			return {
-				adapterId: 'dkb',
+				adapterId: 'dkb_girocard',
 				rows: [],
 				errors: [
 					makeParseError(1, 'missing_header', 'Could not find DKB Buchungsdatum header row')
@@ -42,7 +42,7 @@ export const dkbAdapter: BankAdapter = {
 		const missingColumns = missingRequiredColumns(parsed.headers, requiredColumns);
 		if (missingColumns.length > 0) {
 			return {
-				adapterId: 'dkb',
+				adapterId: 'dkb_girocard',
 				rows: [],
 				errors: [
 					makeParseError(
@@ -125,7 +125,7 @@ export const dkbAdapter: BankAdapter = {
 						record.values.IBAN
 					]),
 				source: {
-					bankId: 'dkb',
+					bankId: 'dkb_girocard',
 					rowNumber: record.rowNumber,
 					rawType: record.values.Umsatztyp,
 					externalId
@@ -134,7 +134,7 @@ export const dkbAdapter: BankAdapter = {
 		}
 
 		return {
-			adapterId: 'dkb',
+			adapterId: 'dkb_girocard',
 			rows,
 			errors,
 			skippedRows: parsed.records.length - rows.length,

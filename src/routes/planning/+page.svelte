@@ -15,15 +15,6 @@
 		id: string;
 		name: string;
 		institution: string | null;
-		profile: { id: string; label: string; bankId: string } | null;
-	}
-
-	interface Profile {
-		id: string;
-		accountId: string;
-		label: string;
-		bankId: string;
-		status: string;
 	}
 
 	interface Category {
@@ -36,8 +27,6 @@
 		id: string;
 		accountId: string | null;
 		accountName: string | null;
-		profileId: string | null;
-		profileLabel: string | null;
 		categoryId: string | null;
 		categoryName: string | null;
 		name: string;
@@ -152,7 +141,6 @@
 	const liabilityStatuses: LiabilityStatus[] = ['active', 'cleared'];
 
 	let accounts = $state<Account[]>([]);
-	let profiles = $state<Profile[]>([]);
 	let categories = $state<Category[]>([]);
 	let contracts = $state<Contract[]>([]);
 	let plannedPayments = $state<PlannedPayment[]>([]);
@@ -186,7 +174,6 @@
 	let editContractEndDate = $state('');
 	let editContractStatus = $state<ContractStatus>('active');
 	let editContractAccountId = $state('');
-	let editContractProfileId = $state('');
 	let editContractCategoryId = $state('');
 	let editingPaymentId = $state<string | null>(null);
 	let editPaymentPayee = $state('');
@@ -214,7 +201,6 @@
 	let contractEndDate = $state('');
 	let contractStatus = $state<ContractStatus>('active');
 	let contractAccountId = $state('');
-	let contractProfileId = $state('');
 	let contractCategoryId = $state('');
 
 	let paymentPayee = $state('');
@@ -264,7 +250,6 @@
 		try {
 			const [
 				accountPayload,
-				profilePayload,
 				categoryPayload,
 				contractPayload,
 				paymentPayload,
@@ -276,7 +261,6 @@
 				projectionPayload
 			] = await Promise.all([
 				fetchJson<{ accounts: Account[] }>('/api/accounts'),
-				fetchJson<{ profiles: Profile[] }>('/api/profiles'),
 				fetchJson<{ categories: Category[] }>('/api/categories'),
 				fetchJson<{ contracts: Contract[] }>('/api/contracts'),
 				fetchJson<{ plannedPayments: PlannedPayment[] }>('/api/planned-payments'),
@@ -289,7 +273,6 @@
 			]);
 
 			accounts = accountPayload.accounts;
-			profiles = profilePayload.profiles.filter((profile) => profile.status === 'active');
 			categories = categoryPayload.categories;
 			contracts = contractPayload.contracts;
 			plannedPayments = paymentPayload.plannedPayments;
@@ -317,7 +300,6 @@
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
 					accountId: contractAccountId || null,
-					profileId: contractProfileId || null,
 					categoryId: contractCategoryId || null,
 					name: contractName,
 					payee: contractPayee || null,
@@ -360,7 +342,6 @@
 		editContractEndDate = contract.endDate ?? '';
 		editContractStatus = contract.status;
 		editContractAccountId = contract.accountId ?? '';
-		editContractProfileId = contract.profileId ?? '';
 		editContractCategoryId = contract.categoryId ?? '';
 	}
 
@@ -379,7 +360,6 @@
 				body: JSON.stringify({
 					id: contractId,
 					accountId: editContractAccountId || null,
-					profileId: editContractProfileId || null,
 					categoryId: editContractCategoryId || null,
 					name: editContractName,
 					payee: editContractPayee || null,
@@ -802,17 +782,17 @@
 	{/if}
 
 	<section class="grid gap-4 md:grid-cols-3">
-		<div class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<p class="text-sm text-zinc-500">{m.upcoming_payments()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">{centsToEuros(upcomingPaymentTotal)}</p>
 		</div>
-		<div class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<p class="text-sm text-zinc-500">{m.upcoming_income()}</p>
 			<p class="mt-2 text-2xl font-semibold text-emerald-700">
 				{centsToEuros(upcomingIncomeTotal)}
 			</p>
 		</div>
-		<div class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<p class="text-sm text-zinc-500">{m.balance_before_salary()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">
 				{projection ? centsToEuros(projection.projectedBalanceCents) : m.not_available()}
@@ -821,7 +801,7 @@
 				{projection ? formatDate(projection.projectionDate) : m.not_available()}
 			</p>
 		</div>
-		<div class="rounded border border-zinc-200 bg-white p-5 shadow-sm md:col-span-3">
+		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm md:col-span-3">
 			<p class="text-sm text-zinc-500">{m.active_liabilities()}</p>
 			<p class="mt-2 text-2xl font-semibold text-red-700">
 				{centsToEuros(activeLiabilityTotal)}
@@ -830,7 +810,7 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-3">
-		<section class="rounded border border-zinc-200 bg-white shadow-sm xl:col-span-2">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm xl:col-span-2">
 			<div class="border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.contracts_title()}</h2>
 			</div>
@@ -912,7 +892,7 @@
 									/>
 								</label>
 							</div>
-							<div class="grid gap-4 sm:grid-cols-3">
+			<div class="grid gap-4 sm:grid-cols-2">
 								<label class="grid gap-1 text-sm font-medium text-zinc-700">
 									<span>{m.account()}</span>
 									<select class="w-full rounded border-zinc-300" bind:value={editContractAccountId}>
@@ -931,15 +911,6 @@
 										<option value="">{m.uncategorized()}</option>
 										{#each categories as category (category.id)}
 											<option value={category.id}>{category.name}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.profile_title()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editContractProfileId}>
-										<option value="">{m.not_available()}</option>
-										{#each profiles as profile (profile.id)}
-											<option value={profile.id}>{profile.label}</option>
 										{/each}
 									</select>
 								</label>
@@ -1000,7 +971,7 @@
 			</div>
 		</section>
 
-		<form class="rounded border border-zinc-200 bg-white p-5 shadow-sm" onsubmit={createContract}>
+		<form class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm" onsubmit={createContract}>
 			<h2 class="text-lg font-semibold text-zinc-950">{m.new_contract()}</h2>
 			<div class="mt-5 grid gap-4">
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
@@ -1074,15 +1045,6 @@
 					</label>
 				</div>
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.profile_title()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={contractProfileId}>
-						<option value="">{m.not_available()}</option>
-						{#each profiles as profile (profile.id)}
-							<option value={profile.id}>{profile.label}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
 					<span>{m.status()}</span>
 					<select class="w-full rounded border-zinc-300" bind:value={contractStatus}>
 						{#each contractStatuses as option (option)}
@@ -1102,7 +1064,7 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-2">
-		<section class="rounded border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
 			<div class="border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.planned_payments_title()}</h2>
 			</div>
@@ -1289,7 +1251,7 @@
 			</form>
 		</section>
 
-		<section class="rounded border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
 			<div class="border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.planned_income_title()}</h2>
 			</div>
@@ -1478,7 +1440,7 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-3">
-		<section class="rounded border border-zinc-200 bg-white shadow-sm xl:col-span-2">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm xl:col-span-2">
 			<div class="border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.liabilities_title()}</h2>
 			</div>
@@ -1526,7 +1488,7 @@
 			</div>
 		</section>
 
-		<form class="rounded border border-zinc-200 bg-white p-5 shadow-sm" onsubmit={createLiability}>
+		<form class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm" onsubmit={createLiability}>
 			<h2 class="text-lg font-semibold text-zinc-950">{m.new_liability()}</h2>
 			<div class="mt-5 grid gap-4">
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
@@ -1586,7 +1548,7 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-3">
-		<section class="rounded border border-zinc-200 bg-white shadow-sm xl:col-span-2">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm xl:col-span-2">
 			<div class="flex items-center justify-between gap-3 border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.recurring_title()}</h2>
 				<button
@@ -1712,7 +1674,7 @@
 			</div>
 		</section>
 
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.current_month_outlook()}</h2>
 			<div class="mt-5 grid gap-4">
 				<div>

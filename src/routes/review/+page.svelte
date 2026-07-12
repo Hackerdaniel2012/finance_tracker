@@ -448,7 +448,7 @@
 	{/if}
 
 	<section class="grid gap-6 xl:grid-cols-[1fr_24rem]">
-		<section class="rounded border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
 			<div class="border-b border-zinc-200 p-5">
 				<div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
 					<div>
@@ -534,7 +534,7 @@
 			</div>
 		</section>
 
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.classify_transaction()}</h2>
 			{#if selectedTransaction}
 				<div class="mt-4 rounded border border-zinc-200 bg-zinc-50 p-4 text-sm">
@@ -614,7 +614,7 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-2">
-		<section class="rounded border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
 			<div class="flex items-center justify-between border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.categories_title()}</h2>
 				<button
@@ -626,7 +626,7 @@
 				</button>
 			</div>
 			<div class="grid gap-5 p-5 lg:grid-cols-[1fr_18rem]">
-				<div class="divide-y divide-zinc-100 rounded border border-zinc-200">
+				<div class="divide-y divide-zinc-100 rounded-ui border border-zinc-200">
 					{#each categories as category (category.id)}
 						<button
 							class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-zinc-50"
@@ -683,7 +683,7 @@
 			</div>
 		</section>
 
-		<section class="rounded border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
 			<div class="flex items-center justify-between border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.category_rules_title()}</h2>
 				<div class="flex gap-2">
@@ -705,7 +705,7 @@
 				</div>
 			</div>
 			<div class="grid gap-5 p-5 lg:grid-cols-[1fr_18rem]">
-				<div class="divide-y divide-zinc-100 rounded border border-zinc-200">
+				<div class="divide-y divide-zinc-100 rounded-ui border border-zinc-200">
 					{#each rules as rule (rule.id)}
 						<button
 							class="grid w-full gap-1 px-4 py-3 text-left hover:bg-zinc-50"

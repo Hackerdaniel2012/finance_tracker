@@ -19,7 +19,6 @@ export function parseCreateContractInput(value: unknown): CreateContractInput {
 
 	return {
 		accountId: optionalNullableString(body.accountId, 'accountId'),
-		profileId: optionalNullableString(body.profileId, 'profileId'),
 		categoryId: optionalNullableString(body.categoryId, 'categoryId'),
 		name: requiredString(body.name, 'name'),
 		payee: optionalNullableString(body.payee, 'payee'),
@@ -38,7 +37,6 @@ export function parseUpdateContractInput(value: unknown): UpdateContractInput {
 	const input: UpdateContractInput = { id: requiredString(body.id, 'id') };
 
 	if ('accountId' in body) input.accountId = optionalNullableString(body.accountId, 'accountId');
-	if ('profileId' in body) input.profileId = optionalNullableString(body.profileId, 'profileId');
 	if ('categoryId' in body)
 		input.categoryId = optionalNullableString(body.categoryId, 'categoryId');
 	if ('name' in body) input.name = requiredString(body.name, 'name');

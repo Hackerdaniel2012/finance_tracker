@@ -7,7 +7,8 @@ import type { RequestHandler } from './$types';
 export const POST: RequestHandler = async (event) => {
 	try {
 		const form = await readFormData(event.request);
-		const profileId = getFormString(form, 'profileId');
+		const accountId = getFormString(form, 'accountId');
+		const adapterId = getFormString(form, 'adapterId');
 		const file = form.get('file');
 
 		if (!(file instanceof Blob)) {
@@ -15,7 +16,8 @@ export const POST: RequestHandler = async (event) => {
 		}
 
 		const preview = await previewImport(getRequestDatabase(event), {
-			profileId,
+			accountId,
+			adapterId,
 			csv: await file.text()
 		});
 

@@ -1,4 +1,4 @@
-export type BankId = 'n26' | 'trade_republic' | 'dkb';
+export type BankId = 'n26' | 'trade_republic' | 'dkb_girocard' | 'dkb_creditcard';
 
 export interface BankAdapter {
 	id: BankId;

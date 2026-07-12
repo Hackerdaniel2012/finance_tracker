@@ -1,8 +1,5 @@
-import { bankAdapters, type BankId } from '$lib/banks';
 import { ValidationError } from './errors';
-import type { CreateAccountInput, CreateProfileInput, UpdateAccountInput } from './types';
-
-const bankIds = new Set<BankId>(bankAdapters.map((adapter) => adapter.id));
+import type { CreateAccountInput, UpdateAccountInput } from './types';
 
 export function parseCreateAccountInput(value: unknown): CreateAccountInput {
 	const body = asObject(value);
@@ -54,21 +51,6 @@ export function parseUpdateAccountInput(value: unknown): UpdateAccountInput {
 
 export function parseDeleteAccountInput(value: unknown): { id: string } {
 	return { id: requiredString(asObject(value).id, 'id') };
-}
-
-export function parseCreateProfileInput(value: unknown): CreateProfileInput {
-	const body = asObject(value);
-	const bankId = requiredString(body.bankId, 'bankId');
-
-	if (!bankIds.has(bankId as BankId)) {
-		throw new ValidationError('bankId must be one of n26, trade_republic, dkb');
-	}
-
-	return {
-		accountId: requiredString(body.accountId, 'accountId'),
-		bankId: bankId as BankId,
-		label: requiredString(body.label, 'label')
-	};
 }
 
 function asObject(value: unknown): Record<string, unknown> {

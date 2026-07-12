@@ -131,7 +131,6 @@ async function getTransaction(db: DbClient, id: string): Promise<Transaction | n
 function baseTransactionSelect(): string {
 	return `SELECT
 		t.id,
-		t.profile_id,
 		t.account_id,
 		a.name AS account_name,
 		t.import_batch_id,
@@ -179,10 +178,6 @@ function buildTransactionWhere(filters: TransactionListFilters): {
 		values.push(filters.subaccount);
 	}
 
-	if (filters.profileId) {
-		clauses.push('t.profile_id = ?');
-		values.push(filters.profileId);
-	}
 
 	if (filters.categoryId) {
 		clauses.push('t.category_id = ?');
@@ -578,7 +573,6 @@ async function assertCategoryExists(db: DbClient, categoryId: string): Promise<v
 function mapTransaction(row: TransactionRow, tags: TransactionTag[]): Transaction {
 	return {
 		id: row.id,
-		profileId: row.profile_id,
 		accountId: row.account_id,
 		accountName: row.account_name,
 		importBatchId: row.import_batch_id,
@@ -618,7 +612,6 @@ function escapeLike(value: string): string {
 
 interface TransactionRow extends DbRow {
 	id: string;
-	profile_id: string;
 	account_id: string;
 	account_name: string;
 	import_batch_id: string | null;

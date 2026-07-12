@@ -5,17 +5,15 @@
 	import { BarChart, LineChart } from 'layerchart/svg';
 	import { onMount } from 'svelte';
 	import { fetchJsonWithRetry } from '$lib/fetch-json';
+	import Picker from '$lib/components/Picker.svelte';
 
-	type BankId = 'n26' | 'trade_republic' | 'dkb';
-
-	interface AccountWithProfile {
+	interface AccountWithBalance {
 		id: string;
 		name: string;
 		institution: string | null;
 		openingBalanceCents: number;
 		currentBalanceCents: number | null;
 		balanceCents: number;
-		profile: { id: string; bankId: BankId; label: string } | null;
 		subaccounts: string[];
 	}
 
@@ -75,12 +73,13 @@
 		nextIncome: UpcomingIncome | null;
 	}
 
-	let accounts = $state<AccountWithProfile[]>([]);
+	let accounts = $state<AccountWithBalance[]>([]);
 	let summary = $state<SummaryReport | null>(null);
 	let netWorth = $state<NetWorthReport | null>(null);
 	let monthCashflow = $state<MonthCashflowReport | null>(null);
 	let projection = $state<BalanceProjection | null>(null);
 	let dashboardStatus = $state(m.dashboard_status_loading());
+	let dashboardStatusTone = $state<'loading' | 'ready' | 'error'>('loading');
 	let dashboardError = $state<string | null>(null);
 	let dashboardAccountScope = $state('');
 
@@ -141,7 +140,7 @@
 
 	async function loadAccounts() {
 		try {
-			const payload = await fetchJson<{ accounts: AccountWithProfile[] }>('/api/accounts');
+			const payload = await fetchJson<{ accounts: AccountWithBalance[] }>('/api/accounts');
 			accounts = payload.accounts;
 		} catch {
 			accounts = [];
@@ -150,6 +149,7 @@
 
 	async function loadDashboard() {
 		dashboardStatus = m.dashboard_status_loading();
+		dashboardStatusTone = 'loading';
 		dashboardError = null;
 
 		try {
@@ -166,10 +166,15 @@
 			if (results[3].status === 'fulfilled') projection = results[3].value.projection;
 			if (results.some((result) => result.status === 'rejected')) {
 				dashboardStatus = m.dashboard_status_error();
+				dashboardStatusTone = 'error';
 				dashboardError = m.dashboard_status_error();
-			} else dashboardStatus = m.dashboard_status_ready();
+			} else {
+				dashboardStatus = m.dashboard_status_ready();
+				dashboardStatusTone = 'ready';
+			}
 		} catch {
 			dashboardStatus = m.dashboard_status_error();
+			dashboardStatusTone = 'error';
 			dashboardError = m.dashboard_status_error();
 		}
 	}
@@ -205,32 +210,33 @@
 
 <main class="mx-auto max-w-7xl px-4 py-6 lg:py-8">
 	<section class="space-y-5">
-		<div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-			<div>
-				<h1 class="text-3xl font-semibold tracking-normal text-zinc-950 sm:text-4xl">
-					{m.app_title()}
-				</h1>
-				<p class="mt-2 max-w-3xl text-base leading-7 text-zinc-700">{m.app_subtitle()}</p>
-			</div>
-			<div class="flex flex-col items-start gap-3 sm:items-end">
-				<p class="text-sm text-zinc-500">{dashboardStatus}</p>
-				<div class="flex flex-col gap-2 sm:flex-row sm:items-end">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.dashboard_account_scope()}</span>
-						<select
-							class="min-w-48 rounded border-zinc-300"
-							aria-label={m.dashboard_account_scope()}
-							bind:value={dashboardAccountScope}
-							onchange={() => loadDashboard()}
-						>
-							<option value="">{m.all_accounts()}</option>
-							{#each buildAccountScopeOptions(accounts) as option (option.value)}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</label>
-				</div>
-			</div>
+		<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+			<h1 class="text-3xl font-semibold tracking-normal text-zinc-950 sm:text-4xl">{m.nav_dashboard()}</h1>
+			<p
+				class={`inline-flex items-center gap-1.5 text-sm font-medium ${
+					dashboardStatusTone === 'error'
+						? 'text-red-600'
+						: dashboardStatusTone === 'ready'
+							? 'text-emerald-600'
+							: 'text-amber-600'
+				}`}
+				aria-live="polite"
+			>
+				{#if dashboardStatusTone === 'ready'}
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
+						<circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" />
+					</svg>
+				{:else if dashboardStatusTone === 'error'}
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
+						<circle cx="12" cy="12" r="9" /><path d="M12 8v4" /><path d="M12 16h.01" />
+					</svg>
+				{:else}
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4 animate-spin" aria-hidden="true">
+						<path d="M12 3a9 9 0 1 0 9 9" />
+					</svg>
+				{/if}
+				{dashboardStatus}
+			</p>
 		</div>
 
 		{#if dashboardError}
@@ -241,27 +247,33 @@
 		{/if}
 	</section>
 
-	<section class="grid gap-6">
+	<section class="mt-4 grid gap-6">
 		<div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+			<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
+				<label class="grid gap-2">
+					<span class="text-sm font-medium text-zinc-500">{m.dashboard_account_scope()}</span>
+					<Picker
+						ariaLabel={m.dashboard_account_scope()}
+						placeholder={m.all_accounts()}
+						options={[{ value: '', label: m.all_accounts() }, ...buildAccountScopeOptions(accounts)]}
+						bind:value={dashboardAccountScope}
+						onchange={() => loadDashboard()}
+					/>
+				</label>
+			</article>
+			<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.total_balance()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
 					{netWorth || accounts.length > 0 ? centsToEuros(totalAccountBalanceCents) : '—'}
 				</p>
 			</article>
-			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+			<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.month_net()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
 					{monthCashflow ? centsToEuros(monthCashflow.actual.netCents) : '—'}
 				</p>
 			</article>
-			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
-				<p class="text-sm font-medium text-zinc-500">{m.unknown_in_period()}</p>
-				<p class="mt-2 text-2xl font-semibold text-zinc-950">
-					{summary ? summary.totals.unknownCount : '—'}
-				</p>
-			</article>
-			<article class="rounded border border-zinc-200 bg-white p-4 shadow-sm">
+			<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.balance_before_salary()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
 					{projection ? centsToEuros(projection.projectedBalanceCents) : '—'}
@@ -272,14 +284,14 @@
 			</article>
 		</div>
 
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<div>
 				<h2 class="text-lg font-semibold text-zinc-950">{m.net_worth()}</h2>
 				<p class="mt-1 text-sm text-zinc-500">
 					{summary?.range.from ?? ''} - {summary?.range.to ?? ''}
 				</p>
 			</div>
-			<div class="mt-5 h-64">
+			<div class="mt-5 h-72 p-4">
 				{#if netWorthPoints.length > 0}
 					<LineChart
 						data={netWorthPoints}
@@ -293,7 +305,7 @@
 					/>
 				{:else}
 					<div
-						class="flex h-full items-center justify-center rounded border border-dashed border-zinc-300"
+						class="flex h-full items-center justify-center rounded-ui border border-dashed border-zinc-300"
 					>
 						<p class="text-sm text-zinc-500">{m.no_chart_data()}</p>
 					</div>
@@ -301,7 +313,7 @@
 			</div>
 		</section>
 
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<div>
 				<h2 class="text-lg font-semibold text-zinc-950">{m.expenses_by_category()}</h2>
 				<p class="mt-1 text-sm text-zinc-500">
@@ -310,9 +322,9 @@
 			</div>
 			<div class="mt-5 grid gap-4 md:grid-cols-3">
 				{#each expenseCategoryPoints as month, monthIndex (month.month)}
-					<article class="min-w-0 rounded bg-zinc-50 p-3">
+					<article class="min-w-0 rounded-ui bg-zinc-50 p-3">
 						<h3 class="font-medium text-zinc-950">{month.label}</h3>
-						<div class="mt-3 h-64">
+						<div class="mt-3 h-72 p-4">
 							{#if month.categories.some((category) => category.expense > 0)}
 								<BarChart
 									data={month.categories}
@@ -336,7 +348,7 @@
 		</section>
 
 		<section class="grid gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-			<article class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+			<article class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.recent_transactions()}</h2>
 				<div class="mt-4 divide-y divide-zinc-200">
 					{#if (summary?.recentTransactions.length ?? 0) === 0}
@@ -359,22 +371,22 @@
 				</div>
 			</article>
 
-			<article class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+			<article class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.cashflow_this_month()}</h2>
 				<div class="mt-4 grid gap-3 sm:grid-cols-3">
-					<div class="rounded bg-zinc-50 p-3">
+					<div class="rounded-ui bg-zinc-50 p-3">
 						<p class="text-xs font-medium text-zinc-500">{m.actual_income()}</p>
 						<p class="mt-1 font-semibold text-emerald-700">
 							{centsToEuros(monthCashflow?.actual.incomeCents ?? 0)}
 						</p>
 					</div>
-					<div class="rounded bg-zinc-50 p-3">
+					<div class="rounded-ui bg-zinc-50 p-3">
 						<p class="text-xs font-medium text-zinc-500">{m.actual_expenses()}</p>
 						<p class="mt-1 font-semibold text-zinc-950">
 							{centsToEuros(monthCashflow?.actual.expenseCents ?? 0)}
 						</p>
 					</div>
-					<div class="rounded bg-zinc-50 p-3">
+					<div class="rounded-ui bg-zinc-50 p-3">
 						<p class="text-xs font-medium text-zinc-500">{m.actual_net()}</p>
 						<p class="mt-1 font-semibold text-zinc-950">
 							{centsToEuros(monthCashflow?.actual.netCents ?? 0)}

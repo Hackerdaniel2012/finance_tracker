@@ -7,8 +7,6 @@ export interface Contract {
 	id: string;
 	accountId: string | null;
 	accountName: string | null;
-	profileId: string | null;
-	profileLabel: string | null;
 	categoryId: string | null;
 	categoryName: string | null;
 	name: string;
@@ -26,7 +24,6 @@ export interface Contract {
 
 export interface CreateContractInput {
 	accountId?: string | null;
-	profileId?: string | null;
 	categoryId?: string | null;
 	name: string;
 	payee?: string | null;
@@ -42,7 +39,6 @@ export interface CreateContractInput {
 export interface UpdateContractInput {
 	id: string;
 	accountId?: string | null;
-	profileId?: string | null;
 	categoryId?: string | null;
 	name?: string;
 	payee?: string | null;

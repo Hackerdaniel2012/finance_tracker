@@ -11,7 +11,6 @@ export interface TransactionTag {
 
 export interface Transaction {
 	id: string;
-	profileId: string;
 	accountId: string;
 	accountName: string;
 	importBatchId: string | null;
@@ -44,7 +43,6 @@ export interface Transaction {
 export interface TransactionListFilters {
 	accountId?: string;
 	subaccount?: string;
-	profileId?: string;
 	categoryId?: string;
 	status?: TransactionClassificationStatus;
 	transactionDirection?: TransactionDirection;

@@ -8,8 +8,7 @@ export async function listImportBatches(db: DbClient): Promise<ImportBatch[]> {
 		.prepare(
 			`SELECT
 				b.id,
-				b.profile_id,
-				p.account_id,
+				b.account_id,
 				a.name AS account_name,
 				b.adapter_id,
 				b.file_hash,
@@ -21,8 +20,7 @@ export async function listImportBatches(db: DbClient): Promise<ImportBatch[]> {
 				b.error_count,
 				b.created_at
 			FROM import_batches b
-			INNER JOIN import_profiles p ON p.id = b.profile_id
-			INNER JOIN accounts a ON a.id = p.account_id
+			INNER JOIN accounts a ON a.id = b.account_id
 			ORDER BY b.created_at DESC, b.id DESC`
 		)
 		.all<ImportBatchRow>();
@@ -51,7 +49,6 @@ export async function deleteImportBatch(db: DbClient, id: string): Promise<void>
 function mapImportBatch(row: ImportBatchRow): ImportBatch {
 	return {
 		id: row.id,
-		profileId: row.profile_id,
 		accountId: row.account_id,
 		accountName: row.account_name,
 		adapterId: row.adapter_id,
@@ -68,7 +65,6 @@ function mapImportBatch(row: ImportBatchRow): ImportBatch {
 
 interface ImportBatchRow extends DbRow {
 	id: string;
-	profile_id: string;
 	account_id: string;
 	account_name: string;
 	adapter_id: BankId;

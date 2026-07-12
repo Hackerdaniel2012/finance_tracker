@@ -11,20 +11,19 @@ export async function listContracts(db: DbClient): Promise<Contract[]> {
 }
 
 export async function createContract(db: DbClient, input: CreateContractInput): Promise<Contract> {
-	await assertOptionalLinks(db, input.accountId, input.profileId, input.categoryId);
+	await assertOptionalLinks(db, input.accountId, input.categoryId);
 	const id = crypto.randomUUID();
 
 	await db
 		.prepare(
 			`INSERT INTO contracts (
-				id, account_id, profile_id, category_id, name, payee, kind, cadence,
+				id, account_id, category_id, name, payee, kind, cadence,
 				expected_amount_cents, next_date, end_date, status, source
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
 			input.accountId ?? null,
-			input.profileId ?? null,
 			input.categoryId ?? null,
 			input.name,
 			input.payee ?? null,
@@ -46,14 +45,13 @@ export async function createContract(db: DbClient, input: CreateContractInput): 
 export async function updateContract(db: DbClient, input: UpdateContractInput): Promise<Contract> {
 	const existing = await getContract(db, input.id);
 	if (!existing) throw new NotFoundError('Contract not found');
-	await assertOptionalLinks(db, input.accountId, input.profileId, input.categoryId);
+	await assertOptionalLinks(db, input.accountId, input.categoryId);
 
 	await db
 		.prepare(
 			`UPDATE contracts
 			SET
 				account_id = ?,
-				profile_id = ?,
 				category_id = ?,
 				name = ?,
 				payee = ?,
@@ -69,7 +67,6 @@ export async function updateContract(db: DbClient, input: UpdateContractInput): 
 		)
 		.bind(
 			input.accountId === undefined ? existing.accountId : input.accountId,
-			input.profileId === undefined ? existing.profileId : input.profileId,
 			input.categoryId === undefined ? existing.categoryId : input.categoryId,
 			input.name ?? existing.name,
 			input.payee === undefined ? existing.payee : input.payee,
@@ -105,8 +102,6 @@ function contractSelect(): string {
 		c.id,
 		c.account_id,
 		a.name AS account_name,
-		c.profile_id,
-		p.label AS profile_label,
 		c.category_id,
 		cat.name AS category_name,
 		c.name,
@@ -122,24 +117,21 @@ function contractSelect(): string {
 		c.updated_at
 	FROM contracts c
 	LEFT JOIN accounts a ON a.id = c.account_id
-	LEFT JOIN import_profiles p ON p.id = c.profile_id
 	LEFT JOIN categories cat ON cat.id = c.category_id`;
 }
 
 async function assertOptionalLinks(
 	db: DbClient,
 	accountId?: string | null,
-	profileId?: string | null,
 	categoryId?: string | null
 ): Promise<void> {
 	if (accountId) await assertExists(db, 'accounts', accountId, 'Account not found');
-	if (profileId) await assertExists(db, 'import_profiles', profileId, 'Profile not found');
 	if (categoryId) await assertExists(db, 'categories', categoryId, 'Category not found');
 }
 
 async function assertExists(
 	db: DbClient,
-	table: 'accounts' | 'import_profiles' | 'categories',
+	table: 'accounts' | 'categories',
 	id: string,
 	message: string
 ): Promise<void> {
@@ -152,8 +144,6 @@ function mapContract(row: ContractRow): Contract {
 		id: row.id,
 		accountId: row.account_id,
 		accountName: row.account_name,
-		profileId: row.profile_id,
-		profileLabel: row.profile_label,
 		categoryId: row.category_id,
 		categoryName: row.category_name,
 		name: row.name,
@@ -174,8 +164,6 @@ interface ContractRow extends DbRow {
 	id: string;
 	account_id: string | null;
 	account_name: string | null;
-	profile_id: string | null;
-	profile_label: string | null;
 	category_id: string | null;
 	category_name: string | null;
 	name: string;

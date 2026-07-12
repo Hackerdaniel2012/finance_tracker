@@ -1,5 +1,3 @@
-import type { BankId } from '$lib/banks';
-
 export interface Account {
 	id: string;
 	name: string;
@@ -12,19 +10,8 @@ export interface Account {
 	updatedAt: string;
 }
 
-export interface ImportProfile {
-	id: string;
-	accountId: string;
-	bankId: BankId;
-	label: string;
-	status: 'active' | 'archived';
-	createdAt: string;
-	updatedAt: string;
-}
-
-export interface AccountWithProfile extends Account {
+export interface AccountWithBalance extends Account {
 	balanceCents: number;
-	profile: ImportProfile | null;
 	subaccounts: string[];
 }
 
@@ -43,10 +30,4 @@ export interface UpdateAccountInput {
 	openingBalanceCents?: number;
 	currentBalanceCents?: number | null;
 	displayOrder?: number;
-}
-
-export interface CreateProfileInput {
-	accountId: string;
-	bankId: BankId;
-	label: string;
 }

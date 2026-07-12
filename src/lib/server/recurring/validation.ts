@@ -27,7 +27,6 @@ export function parseUpdateRecurringGroupInput(
 	const input: UpdateRecurringGroupInput = { id: requiredString(id, 'id') };
 
 	if ('accountId' in body) input.accountId = optionalNullableString(body.accountId, 'accountId');
-	if ('profileId' in body) input.profileId = optionalNullableString(body.profileId, 'profileId');
 	if ('categoryId' in body)
 		input.categoryId = optionalNullableString(body.categoryId, 'categoryId');
 	if ('label' in body) input.label = optionalNullableString(body.label, 'label');

@@ -1,6 +1,11 @@
-import { getBankAdapter, type NormalizedTransaction, type ParseError } from '$lib/banks';
+import {
+	getBankAdapter,
+	type BankId,
+	type NormalizedTransaction,
+	type ParseError
+} from '$lib/banks';
 import { ConflictError, NotFoundError, ValidationError } from '../accounts/errors';
-import { getProfile } from '../accounts/repository';
+import { getAccount } from '../accounts/repository';
 import { listCategoryRules } from '../categories/repository';
 import type { CategoryRule } from '../categories/types';
 import { matchesCategoryRule } from '../categories/matcher';
@@ -15,9 +20,9 @@ export async function confirmImport(
 	db: DbClient,
 	input: ConfirmImportInput
 ): Promise<ImportReport> {
-	const profileId = input.profileId.trim();
-	if (!profileId) {
-		throw new ValidationError('profileId is required');
+	const accountId = input.accountId.trim();
+	if (!accountId) {
+		throw new ValidationError('accountId is required');
 	}
 
 	if (!input.csv.trim()) {
@@ -34,24 +39,24 @@ export async function confirmImport(
 		throw new ValidationError('File hash does not match preview');
 	}
 
-	const profile = await getProfile(db, profileId);
-	if (!profile) {
-		throw new NotFoundError('Import profile not found');
+	const account = await getAccount(db, accountId);
+	if (!account) {
+		throw new NotFoundError('Account not found');
 	}
 
-	const adapter = getBankAdapter(profile.bankId);
+	const adapter = getAdapter(input.adapterId);
 	const parsed = adapter.parse(input.csv);
 	const { startDate, endDate } = getDateRange(parsed.rows.map((row) => row.bookingDate));
 	const batchId = crypto.randomUUID();
-	await assertNewFileHash(db, profile.id, fileHash);
-	const insertableRows = await selectInsertableRows(db, profile.id, parsed.rows);
+	await assertNewFileHash(db, account.id, fileHash);
+	const insertableRows = await selectInsertableRows(db, account.id, parsed.rows);
 	const rules = await listCategoryRules(db);
 	let unknownCount = 0;
 
 	const writeStatements: DbStatement[] = [
 		createBatchStatement(db, {
 			batchId,
-			profileId: profile.id,
+			accountId: account.id,
 			fileHash,
 			adapterId: adapter.id,
 			startDate,
@@ -75,8 +80,7 @@ export async function confirmImport(
 		writeStatements.push(
 			insertTransactionStatement(db, {
 				transactionId,
-				profileId: profile.id,
-				accountId: profile.accountId,
+				accountId: account.id,
 				batchId,
 				categoryId: match?.categoryId ?? null,
 				classificationStatus,
@@ -90,7 +94,7 @@ export async function confirmImport(
 	}
 
 	for (const error of parsed.errors) {
-		writeStatements.push(insertRowErrorStatement(db, batchId, profile.id, error));
+		writeStatements.push(insertRowErrorStatement(db, batchId, error));
 	}
 
 	await runImportWriteBatch(db, writeStatements);
@@ -98,7 +102,7 @@ export async function confirmImport(
 
 	return {
 		batchId,
-		profileId: profile.id,
+		accountId: account.id,
 		adapterId: adapter.id,
 		fileHash,
 		startDate,
@@ -123,30 +127,30 @@ async function runImportWriteBatch(db: DbClient, statements: DbStatement[]): Pro
 	await db.batch(statements);
 }
 
-async function assertNewFileHash(db: DbClient, profileId: string, fileHash: string): Promise<void> {
+async function assertNewFileHash(db: DbClient, accountId: string, fileHash: string): Promise<void> {
 	const existing = await db
 		.prepare(
 			`SELECT id
 			FROM import_batches
-			WHERE profile_id = ?
+			WHERE account_id = ?
 				AND file_hash = ?`
 		)
-		.bind(profileId, fileHash)
+		.bind(accountId, fileHash)
 		.first<IdRow>();
 
 	if (existing) {
-		throw new ConflictError('Import batch already exists for this profile and file');
+		throw new ConflictError('Import batch already exists for this account and file');
 	}
 }
 
 async function selectInsertableRows(
 	db: DbClient,
-	profileId: string,
+	accountId: string,
 	rows: NormalizedTransaction[]
 ): Promise<{ rows: NormalizedTransaction[]; duplicateCount: number }> {
 	const existingKeys = await getExistingDedupeKeys(
 		db,
-		profileId,
+		accountId,
 		rows.map((row) => row.dedupeKey)
 	);
 	const seenKeys = new Set<string>();
@@ -168,7 +172,7 @@ async function selectInsertableRows(
 
 async function getExistingDedupeKeys(
 	db: DbClient,
-	profileId: string,
+	accountId: string,
 	dedupeKeys: string[]
 ): Promise<Set<string>> {
 	const uniqueKeys = [...new Set(dedupeKeys)];
@@ -184,10 +188,10 @@ async function getExistingDedupeKeys(
 			.prepare(
 				`SELECT dedupe_key
 				FROM transactions
-				WHERE profile_id = ?
+				WHERE account_id = ?
 					AND dedupe_key IN (${placeholders})`
 			)
-			.bind(profileId, ...chunk)
+			.bind(accountId, ...chunk)
 			.all<DedupeRow>();
 
 		for (const row of results) {
@@ -202,7 +206,7 @@ function createBatchStatement(
 	db: DbClient,
 	input: {
 		batchId: string;
-		profileId: string;
+		accountId: string;
 		fileHash: string;
 		adapterId: string;
 		startDate: string | null;
@@ -216,13 +220,13 @@ function createBatchStatement(
 	return db
 		.prepare(
 			`INSERT INTO import_batches (
-				id, profile_id, file_hash, adapter_id, start_date, end_date,
+				id, account_id, file_hash, adapter_id, start_date, end_date,
 				row_count, imported_count, duplicate_count, error_count
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			input.batchId,
-			input.profileId,
+			input.accountId,
 			input.fileHash,
 			input.adapterId,
 			input.startDate,
@@ -238,7 +242,6 @@ function insertTransactionStatement(
 	db: DbClient,
 	input: {
 		transactionId: string;
-		profileId: string;
 		accountId: string;
 		batchId: string;
 		categoryId: string | null;
@@ -249,15 +252,14 @@ function insertTransactionStatement(
 	return db
 		.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, import_batch_id, category_id, dedupe_key,
+				id, account_id, import_batch_id, category_id, dedupe_key,
 				booking_date, value_date, amount_cents, currency, original_amount_cents,
 				original_currency, exchange_rate, balance_after_cents, payee, description,
 				note, search_text, classification_status, subaccount
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			input.transactionId,
-			input.profileId,
 			input.accountId,
 			input.batchId,
 			input.categoryId,
@@ -288,18 +290,21 @@ function insertReviewFlagStatement(db: DbClient, transactionId: string): DbState
 		.bind(crypto.randomUUID(), transactionId, 'unknown_category');
 }
 
-function insertRowErrorStatement(
-	db: DbClient,
-	batchId: string,
-	profileId: string,
-	error: ParseError
-): DbStatement {
+function insertRowErrorStatement(db: DbClient, batchId: string, error: ParseError): DbStatement {
 	return db
 		.prepare(
-			`INSERT INTO import_row_errors (id, import_batch_id, profile_id, row_number, code, message)
-			VALUES (?, ?, ?, ?, ?, ?)`
+			`INSERT INTO import_row_errors (id, import_batch_id, row_number, code, message)
+			VALUES (?, ?, ?, ?, ?)`
 		)
-		.bind(crypto.randomUUID(), batchId, profileId, error.rowNumber, error.code, error.message);
+		.bind(crypto.randomUUID(), batchId, error.rowNumber, error.code, error.message);
+}
+
+function getAdapter(adapterId: string) {
+	try {
+		return getBankAdapter(adapterId as BankId);
+	} catch {
+		throw new ValidationError('adapterId is invalid');
+	}
 }
 
 function matchCategoryRule(

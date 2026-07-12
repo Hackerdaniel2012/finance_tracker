@@ -3,37 +3,27 @@
 	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { resolve } from '$app/paths';
 	import { untrack } from 'svelte';
+	import Picker from '$lib/components/Picker.svelte';
 	import type { PageData } from './$types';
 
-	type BankId = 'n26' | 'trade_republic' | 'dkb';
-
-	interface AccountWithProfile {
+	interface AccountWithBalance {
 		id: string;
 		name: string;
 		institution: string | null;
 		openingBalanceCents: number;
 		currentBalanceCents: number | null;
 		balanceCents: number;
-		profile: { id: string; bankId: BankId; label: string } | null;
 	}
-
-	const bankOptions: Array<{ id: BankId; label: string }> = [
-		{ id: 'dkb', label: 'DKB' },
-		{ id: 'n26', label: 'N26' },
-		{ id: 'trade_republic', label: 'Trade Republic' }
-	];
 
 	let { data } = $props<{ data: PageData }>();
 
-	let accounts = $state<AccountWithProfile[]>(untrack(() => data.accounts as AccountWithProfile[]));
+	let accounts = $state<AccountWithBalance[]>(untrack(() => data.accounts as AccountWithBalance[]));
 	let status = $state(m.setup_status_ready());
 	let error = $state<string | null>(null);
 	let accountName = $state('');
-	let institution = $state('');
-	let openingBalance = $state('0.00');
-	let profileAccountId = $state(untrack(() => accounts[0]?.id ?? ''));
-	let profileBankId = $state<BankId>('dkb');
-	let profileLabel = $state('');
+	let institutionChoice = $state('');
+	let customInstitution = $state('');
+	let currentBalance = $state('');
 	let isSaving = $state(false);
 	let deletingAccountId = $state<string | null>(null);
 
@@ -48,41 +38,18 @@
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
 					name: accountName,
-					institution: institution || null,
-					openingBalanceCents: eurosToCents(openingBalance)
+					institution:
+						institutionChoice === 'other'
+							? customInstitution.trim() || null
+							: institutionChoice || null,
+					currentBalanceCents: currentBalance.trim() === '' ? null : eurosToCents(currentBalance)
 				})
 			});
 
 			accountName = '';
-			institution = '';
-			openingBalance = '0.00';
-			status = m.setup_status_saved();
-			await loadAccounts();
-		} catch {
-			status = m.setup_status_error();
-			error = m.setup_status_error();
-		} finally {
-			isSaving = false;
-		}
-	}
-
-	async function createProfile(event: SubmitEvent) {
-		event.preventDefault();
-		isSaving = true;
-		error = null;
-
-		try {
-			await fetchJson('/api/profiles', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					accountId: profileAccountId,
-					bankId: profileBankId,
-					label: profileLabel
-				})
-			});
-
-			profileLabel = '';
+			institutionChoice = '';
+			customInstitution = '';
+			currentBalance = '';
 			status = m.setup_status_saved();
 			await loadAccounts();
 		} catch {
@@ -94,12 +61,11 @@
 	}
 
 	async function loadAccounts() {
-		const payload = await fetchJson<{ accounts: AccountWithProfile[] }>('/api/accounts');
+		const payload = await fetchJson<{ accounts: AccountWithBalance[] }>('/api/accounts');
 		accounts = payload.accounts;
-		profileAccountId = profileAccountId || accounts[0]?.id || '';
 	}
 
-	async function deleteAccount(account: AccountWithProfile) {
+	async function deleteAccount(account: AccountWithBalance) {
 		if (!confirm(m.delete_account_confirm({ name: account.name }))) {
 			return;
 		}
@@ -138,7 +104,7 @@
 		});
 	}
 
-	function accountBalance(account: AccountWithProfile): number {
+	function accountBalance(account: AccountWithBalance): number {
 		return account.balanceCents;
 	}
 </script>
@@ -156,7 +122,7 @@
 		{/if}
 	</section>
 
-	<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+	<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 		<h2 class="text-lg font-semibold text-zinc-950">{m.accounts()}</h2>
 		<div class="mt-5 divide-y divide-zinc-200">
 			{#if accounts.length === 0}
@@ -168,11 +134,6 @@
 							<h3 class="font-semibold text-zinc-950">{account.name}</h3>
 							<p class="mt-1 text-sm text-zinc-600">
 								{account.institution || m.institution()} / {centsToEuros(accountBalance(account))}
-							</p>
-							<p class="mt-1 text-sm text-zinc-500">
-								{account.profile
-									? `${account.profile.label} / ${account.profile.bankId}`
-									: m.no_profile()}
 							</p>
 						</div>
 						<div class="flex flex-wrap items-center gap-2">
@@ -198,7 +159,7 @@
 	</section>
 
 	<aside class="space-y-6">
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.setup_title()}</h2>
 			<form class="mt-5 grid gap-4" onsubmit={createAccount}>
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
@@ -207,14 +168,34 @@
 				</label>
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
 					<span>{m.institution()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={institution} />
+					<Picker
+						ariaLabel={m.institution()}
+						placeholder={m.institution_not_selected()}
+						options={[
+							{ value: 'DKB', label: m.institution_dkb() },
+							{ value: 'N26', label: m.institution_n26() },
+							{ value: 'Trade Republic', label: m.institution_trade_republic() },
+							{ value: 'other', label: m.institution_other() }
+						]}
+						bind:value={institutionChoice}
+					/>
 				</label>
+				{#if institutionChoice === 'other'}
+					<label class="grid gap-1 text-sm font-medium text-zinc-700">
+						<span>{m.institution_custom_name()}</span>
+						<input
+							class="w-full rounded border-zinc-300"
+							bind:value={customInstitution}
+							required
+						/>
+					</label>
+				{/if}
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.opening_balance()}</span>
+					<span>{m.current_balance()}</span>
 					<input
 						class="w-full rounded border-zinc-300"
 						inputmode="decimal"
-						bind:value={openingBalance}
+						bind:value={currentBalance}
 					/>
 				</label>
 				<button
@@ -227,38 +208,5 @@
 			</form>
 		</section>
 
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
-			<h2 class="text-lg font-semibold text-zinc-950">{m.profile_title()}</h2>
-			<form class="mt-5 grid gap-4" onsubmit={createProfile}>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.account()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={profileAccountId} required>
-						<option value="">{m.required()}</option>
-						{#each accounts as account (account.id)}
-							<option value={account.id}>{account.name}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.bank()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={profileBankId}>
-						{#each bankOptions as bank (bank.id)}
-							<option value={bank.id}>{bank.label}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.profile_label()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={profileLabel} required />
-				</label>
-				<button
-					class="rounded border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-950 disabled:opacity-50"
-					type="submit"
-					disabled={isSaving || accounts.length === 0}
-				>
-					{m.create_profile()}
-				</button>
-			</form>
-		</section>
 	</aside>
 </main>

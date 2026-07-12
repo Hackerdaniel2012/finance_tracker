@@ -1,2 +1,81 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/forms';
+
+@theme {
+	--radius-ui: 32px;
+}
+
+html,
+body {
+	background: #fafaf9;
+	overscroll-behavior-y: none;
+}
+
+button:not(.rounded-full):not(.radius-exempt),
+a[class*='rounded']:not(.rounded-full),
+input:not([type='checkbox']):not([type='radio']),
+select,
+textarea {
+	border-radius: var(--radius-ui) !important;
+}
+
+input:not([type='checkbox']):not([type='radio']):not([type='file']),
+select {
+	height: 2.75rem;
+	border-color: rgb(212 212 216);
+	background-color: white;
+	padding: 0.75rem 3rem 0.75rem 1.25rem;
+	font-size: 1rem;
+	font-weight: 600;
+	line-height: 1.5rem;
+	color: rgb(9 9 11);
+	box-shadow: inset 0 0 0 1px rgb(212 212 216 / 0.2);
+}
+
+select:focus {
+	border-color: rgb(37 99 235);
+	outline: 2px solid transparent;
+	outline-offset: 2px;
+	box-shadow: 0 0 0 1px rgb(37 99 235), 0 0 0 3px rgb(59 130 246 / 0.15);
+}
+
+input[type='file']::file-selector-button {
+	border-radius: var(--radius-ui);
+}
+
+.toolbar-backdrop {
+	isolation: isolate;
+}
+
+.toolbar-backdrop::before {
+	position: absolute;
+	top: 0;
+	right: 0;
+	left: 0;
+	height: 100px;
+	z-index: -1;
+	content: '';
+	background: rgb(250 250 249 / 0.8);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	mask-image: linear-gradient(
+		to bottom,
+		#000 0%,
+		#000 60%,
+		rgb(0 0 0 / 0.98) 68%,
+		rgb(0 0 0 / 0.82) 78%,
+		rgb(0 0 0 / 0.48) 88%,
+		rgb(0 0 0 / 0.12) 96%,
+		transparent 100%
+	);
+	-webkit-mask-image: linear-gradient(
+		to bottom,
+		#000 0%,
+		#000 60%,
+		rgb(0 0 0 / 0.98) 68%,
+		rgb(0 0 0 / 0.82) 78%,
+		rgb(0 0 0 / 0.48) 88%,
+		rgb(0 0 0 / 0.12) 96%,
+		transparent 100%
+	);
+}

@@ -1,12 +1,13 @@
 import type { BankId, NormalizedTransaction, ParseError } from '$lib/banks';
 
 export interface ImportPreviewInput {
-	profileId: string;
+	accountId: string;
+	adapterId: string;
 	csv: string;
 }
 
 export interface ImportPreview {
-	profileId: string;
+	accountId: string;
 	adapterId: BankId;
 	fileHash: string;
 	summary: {
@@ -23,14 +24,15 @@ export interface ImportPreview {
 }
 
 export interface ConfirmImportInput {
-	profileId: string;
+	accountId: string;
+	adapterId: string;
 	csv: string;
 	expectedHash: string;
 }
 
 export interface ImportReport {
 	batchId: string;
-	profileId: string;
+	accountId: string;
 	adapterId: BankId;
 	fileHash: string;
 	startDate: string | null;
@@ -44,7 +46,6 @@ export interface ImportReport {
 
 export interface ImportBatch {
 	id: string;
-	profileId: string;
 	accountId: string;
 	accountName: string;
 	adapterId: BankId;

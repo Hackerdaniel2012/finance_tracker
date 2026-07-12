@@ -34,7 +34,6 @@ export function parseTransactionFilters(url: URL): TransactionListFilters {
 	return {
 		accountId: optionalQueryString(url, 'accountId'),
 		subaccount: optionalQueryString(url, 'subaccount'),
-		profileId: optionalQueryString(url, 'profileId'),
 		categoryId: optionalQueryString(url, 'categoryId'),
 		status: optionalStatus(url.searchParams.get('status')),
 		transactionDirection,

@@ -7,7 +7,8 @@ import type { RequestHandler } from './$types';
 export const POST: RequestHandler = async (event) => {
 	try {
 		const form = await readFormData(event.request);
-		const profileId = getFormString(form, 'profileId');
+		const accountId = getFormString(form, 'accountId');
+		const adapterId = getFormString(form, 'adapterId');
 		const expectedHash = getFormString(form, 'expectedHash');
 		const file = form.get('file');
 
@@ -16,7 +17,8 @@ export const POST: RequestHandler = async (event) => {
 		}
 
 		const report = await confirmImport(getRequestDatabase(event), {
-			profileId,
+			accountId,
+			adapterId,
 			expectedHash,
 			csv: await file.text()
 		});

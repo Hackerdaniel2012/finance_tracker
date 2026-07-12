@@ -101,7 +101,7 @@ export async function updateRecurringGroup(
 ): Promise<RecurringGroup> {
 	const existing = await getRecurringGroup(db, input.id);
 	if (!existing) throw new NotFoundError('Recurring group not found');
-	await assertOptionalLinks(db, input.accountId, input.profileId, input.categoryId);
+	await assertOptionalLinks(db, input.accountId, input.categoryId);
 
 	const direction = input.direction ?? existing.direction;
 	const categoryId = input.categoryId === undefined ? existing.categoryId : input.categoryId;
@@ -122,7 +122,7 @@ export async function updateRecurringGroup(
 	await db
 		.prepare(
 			`UPDATE recurring_groups
-			SET account_id = ?, profile_id = ?, category_id = ?, label = ?, payee = ?, direction = ?,
+			SET account_id = ?, category_id = ?, label = ?, payee = ?, direction = ?,
 				canonical_payee_key = ?, cadence = ?, expected_amount_cents = ?, next_date = ?,
 				status = ?, confidence = ?, source = ?, needs_review = ?, detector_version = ?,
 				updated_at = CURRENT_TIMESTAMP
@@ -130,7 +130,6 @@ export async function updateRecurringGroup(
 		)
 		.bind(
 			input.accountId === undefined ? existing.accountId : input.accountId,
-			input.profileId === undefined ? existing.profileId : input.profileId,
 			categoryId,
 			label,
 			payee,
@@ -156,7 +155,7 @@ export async function updateRecurringGroup(
 async function listCandidateTransactions(db: DbClient): Promise<CandidateTransactionRow[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT t.id, t.account_id, t.profile_id, t.category_id, t.payee,
+			`SELECT t.id, t.account_id, t.category_id, t.payee,
 				t.booking_date, t.amount_cents, COALESCE(c.type, 'unknown') AS category_type
 			FROM transactions t
 			LEFT JOIN categories c ON c.id = t.category_id
@@ -167,7 +166,7 @@ async function listCandidateTransactions(db: DbClient): Promise<CandidateTransac
 					WHERE paired.id != t.id
 						AND paired.amount_cents = -t.amount_cents
 						AND ABS(julianday(paired.booking_date) - julianday(t.booking_date)) <= 1
-						AND (paired.account_id != t.account_id OR paired.profile_id = t.profile_id)
+						AND paired.account_id != t.account_id
 				)
 			ORDER BY t.account_id, LOWER(TRIM(t.payee)), t.booking_date`
 		)
@@ -183,7 +182,6 @@ function groupRecurringCandidates(rows: CandidateTransactionRow[]): RecurringCan
 		const exactKey = [row.account_id, direction, canonicalPayeeKey].join('|');
 		const group = exactGroups.get(exactKey) ?? {
 			accountId: row.account_id,
-			profileId: row.profile_id,
 			categoryId: row.category_id,
 			payee: row.payee.trim(),
 			direction,
@@ -310,15 +308,14 @@ function insertRecurringSuggestionStatement(
 	return db
 		.prepare(
 			`INSERT INTO recurring_groups (
-				id, account_id, profile_id, category_id, payee, direction, canonical_payee_key,
+				id, account_id, category_id, payee, direction, canonical_payee_key,
 				cadence, expected_amount_cents, next_date, status, confidence, source,
 				needs_review, detector_version
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'suggested', ?, 'imported', ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'suggested', ?, 'imported', ?, ?)`
 		)
 		.bind(
 			groupId,
 			candidate.accountId,
-			candidate.profileId,
 			candidate.categoryId,
 			candidate.payee,
 			candidate.direction,
@@ -395,8 +392,8 @@ async function listRecurringEvidence(
 }
 
 function recurringGroupSelect(): string {
-	return `SELECT rg.id, rg.account_id, a.name AS account_name, rg.profile_id,
-		p.label AS profile_label, rg.category_id, c.name AS category_name, rg.label, rg.payee,
+	return `SELECT rg.id, rg.account_id, a.name AS account_name,
+		rg.category_id, c.name AS category_name, rg.label, rg.payee,
 		rg.direction, rg.canonical_payee_key, rg.cadence, rg.expected_amount_cents,
 		rg.next_date, rg.status, rg.confidence, rg.source, rg.needs_review,
 		rg.detector_version,
@@ -405,24 +402,21 @@ function recurringGroupSelect(): string {
 		rg.created_at, rg.updated_at
 	FROM recurring_groups rg
 	LEFT JOIN accounts a ON a.id = rg.account_id
-	LEFT JOIN import_profiles p ON p.id = rg.profile_id
 	LEFT JOIN categories c ON c.id = rg.category_id`;
 }
 
 async function assertOptionalLinks(
 	db: DbClient,
 	accountId?: string | null,
-	profileId?: string | null,
 	categoryId?: string | null
 ): Promise<void> {
 	if (accountId) await assertExists(db, 'accounts', accountId, 'Account not found');
-	if (profileId) await assertExists(db, 'import_profiles', profileId, 'Profile not found');
 	if (categoryId) await assertExists(db, 'categories', categoryId, 'Category not found');
 }
 
 async function assertExists(
 	db: DbClient,
-	table: 'accounts' | 'import_profiles' | 'categories',
+	table: 'accounts' | 'categories',
 	id: string,
 	message: string
 ): Promise<void> {
@@ -544,8 +538,6 @@ function mapRecurringGroup(row: RecurringGroupRow, evidence: RecurringEvidence[]
 		id: row.id,
 		accountId: row.account_id,
 		accountName: row.account_name,
-		profileId: row.profile_id,
-		profileLabel: row.profile_label,
 		categoryId: row.category_id,
 		categoryName: row.category_name,
 		label: row.label,
@@ -583,8 +575,6 @@ interface RecurringGroupRow extends DbRow {
 	id: string;
 	account_id: string | null;
 	account_name: string | null;
-	profile_id: string | null;
-	profile_label: string | null;
 	category_id: string | null;
 	category_name: string | null;
 	label: string | null;
@@ -613,7 +603,6 @@ interface EvidenceRow extends DbRow {
 interface CandidateTransactionRow extends DbRow {
 	id: string;
 	account_id: string;
-	profile_id: string;
 	category_id: string | null;
 	payee: string;
 	booking_date: string;
@@ -622,7 +611,6 @@ interface CandidateTransactionRow extends DbRow {
 }
 interface RecurringCandidate {
 	accountId: string;
-	profileId: string;
 	categoryId: string | null;
 	payee: string;
 	direction: RecurringDirection;

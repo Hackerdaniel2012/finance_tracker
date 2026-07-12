@@ -303,7 +303,7 @@
 		<p class="text-sm text-zinc-500">{pageStatus}</p>
 	</section>
 
-	<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+	<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 		<h2 class="text-lg font-semibold text-zinc-950">{m.filters()}</h2>
 		<form class="mt-5 grid gap-4" onsubmit={applyFilters}>
 			<label class="grid gap-1 text-sm font-medium text-zinc-700">
@@ -426,7 +426,7 @@
 	</section>
 
 	<section class="min-w-0 grid gap-6">
-		<section class="min-w-0 rounded border border-zinc-200 bg-white shadow-sm">
+		<section class="min-w-0 overflow-hidden rounded-ui border border-zinc-200 bg-white shadow-sm">
 			<div class="flex flex-col gap-3 border-b border-zinc-200 p-5 sm:flex-row sm:justify-between">
 				<div>
 					<h2 class="text-lg font-semibold text-zinc-950">{m.transaction_table()}</h2>
@@ -513,7 +513,7 @@
 			{/if}
 		</section>
 
-		<section class="rounded border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.edit_transaction()}</h2>
 			{#if selected}
 				<div class="mt-4 rounded border border-zinc-200 bg-zinc-50 p-4 text-sm">

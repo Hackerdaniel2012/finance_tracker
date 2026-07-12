@@ -9,8 +9,7 @@ export const load: PageLoad = async ({ fetch }) => {
 			institution: string | null;
 			openingBalanceCents: number;
 			currentBalanceCents: number | null;
-			profile: { id: string; bankId: string; label: string } | null;
-		}>;
+	}>;
 	};
 	const accounts = payload.accounts ?? [];
 
