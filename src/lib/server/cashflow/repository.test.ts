@@ -4,7 +4,7 @@ import {
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '../accounts/repository';
+import { createAccount } from '../accounts/repository';
 import { createContract } from '../contracts/repository';
 import type { DbClient } from '../db-client';
 import { createPlannedIncome, createPlannedPayment } from '../planned-cashflow/repository';
@@ -27,21 +27,13 @@ describe('cashflow repository', () => {
 	it('combines month-to-date actuals with the remaining forecast', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
 		const other = await createAccount(db, { name: 'Savings' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'dkb',
-			label: 'Main CSV'
-		});
-		const otherProfile = await createProfile(db, {
-			accountId: other.id,
-			bankId: 'n26',
-			label: 'Savings CSV'
-		});
-		await insertTransaction(profile.id, account.id, 'before-month', '2026-06-30', 99999);
-		await insertTransaction(profile.id, account.id, 'income', '2026-07-02', 200000);
-		await insertTransaction(profile.id, account.id, 'expense', '2026-07-08', -45000);
-		await insertTransaction(profile.id, account.id, 'future', '2026-07-09', -10000);
-		await insertTransaction(otherProfile.id, other.id, 'other-income', '2026-07-03', 30000);
+		const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
+		const otherImportAccount = { ...other, accountId: other.id, bankId: 'n26' as const };
+		await insertTransaction(account.id, 'before-month', '2026-06-30', 99999);
+		await insertTransaction(account.id, 'income', '2026-07-02', 200000);
+		await insertTransaction(account.id, 'expense', '2026-07-08', -45000);
+		await insertTransaction(account.id, 'future', '2026-07-09', -10000);
+		await insertTransaction(other.id, 'other-income', '2026-07-03', 30000);
 		await createPlannedPayment(db, {
 			accountId: account.id,
 			payee: 'Rent',
@@ -434,14 +426,10 @@ describe('cashflow repository', () => {
 
 	it('scopes month cashflow actuals by subaccount', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'Main CSV'
-		});
-		await insertTransaction(profile.id, account.id, 'main-income', '2026-07-02', 200000, 'Main');
-		await insertTransaction(profile.id, account.id, 'main-expense', '2026-07-08', -45000, 'Main');
-		await insertTransaction(profile.id, account.id, 'sub-income', '2026-07-03', 50000, 'Side');
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
+		await insertTransaction(account.id, 'main-income', '2026-07-02', 200000, 'Main');
+		await insertTransaction(account.id, 'main-expense', '2026-07-08', -45000, 'Main');
+		await insertTransaction(account.id, 'sub-income', '2026-07-03', 50000, 'Side');
 
 		const all = await getMonthCashflowReport(db, {
 			asOf: '2026-07-08',
@@ -474,13 +462,9 @@ describe('cashflow repository', () => {
 			name: 'Main Giro',
 			currentBalanceCents: 150000
 		});
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'Main CSV'
-		});
-		await insertTransaction(profile.id, account.id, 'main-debit', '2026-07-01', -20000, 'Main');
-		await insertTransaction(profile.id, account.id, 'side-debit', '2026-07-02', -10000, 'Side');
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
+		await insertTransaction(account.id, 'main-debit', '2026-07-01', -20000, 'Main');
+		await insertTransaction(account.id, 'side-debit', '2026-07-02', -10000, 'Side');
 
 		const all = await getBalanceBeforeSalaryProjection(db, {
 			asOf: '2026-07-08',
@@ -585,7 +569,6 @@ describe('cashflow repository', () => {
 });
 
 async function insertTransaction(
-	profileId: string,
 	accountId: string,
 	id: string,
 	bookingDate: string,
@@ -595,10 +578,10 @@ async function insertTransaction(
 	await db
 		.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, subaccount, search_text
-			) VALUES (?, ?, ?, ?, ?, ?, ?, '')`
+				id, account_id, dedupe_key, booking_date, amount_cents, subaccount, search_text
+			) VALUES (?, ?, ?, ?, ?, ?, '')`
 		)
-		.bind(id, profileId, accountId, id, bookingDate, amountCents, subaccount ?? null)
+		.bind(id, accountId, id, bookingDate, amountCents, subaccount ?? null)
 		.run();
 }
 

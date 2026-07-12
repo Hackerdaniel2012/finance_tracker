@@ -5,7 +5,7 @@ import {
 	createTestDbClient,
 	firstValue
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '../accounts/repository';
+import { createAccount } from '../accounts/repository';
 import { createCategoryRule } from '../categories/repository';
 import type { DbClient } from '../db-client';
 import { confirmImport } from '../imports/confirm';
@@ -164,13 +164,12 @@ describe('transaction repository', () => {
 	it('previews and opt-in applies a rule only to existing unknown matches', async () => {
 		await seedTransactions();
 		const accountId = firstValue<string>(sqlite, 'SELECT id FROM accounts') ?? '';
-		const profileId = firstValue<string>(sqlite, 'SELECT id FROM import_profiles') ?? '';
 		await db
 			.prepare(
-				`INSERT INTO transactions (id, profile_id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text)
-			VALUES ('cafe-2', ?, ?, 'cafe-2', '2026-07-08', -500, 'Cafe Central', 'Cafe Central')`
+				`INSERT INTO transactions (id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text)
+			VALUES ('cafe-2', ?, 'cafe-2', '2026-07-08', -500, 'Cafe Central', 'Cafe Central')`
 			)
-			.bind(profileId, accountId)
+			.bind(accountId)
 			.run();
 		await db
 			.prepare(
@@ -233,11 +232,7 @@ function baseFilters() {
 
 async function seedTransactions() {
 	const account = await createAccount(db, { name: 'DKB Giro' });
-	const profile = await createProfile(db, {
-		accountId: account.id,
-		bankId: 'dkb',
-		label: 'DKB CSV'
-	});
+	const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 	await createCategoryRule(db, {
 		categoryId: 'cat-groceries',
 		name: 'Shop rule',
@@ -253,7 +248,8 @@ async function seedTransactions() {
 	]);
 
 	await confirmImport(db, {
-		profileId: profile.id,
+		accountId: importAccount.accountId,
+		adapterId: importAccount.bankId,
 		csv,
 		expectedHash: await sha256Hex(csv)
 	});

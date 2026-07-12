@@ -4,7 +4,7 @@ import {
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../../tests/db/test-database';
-import { createAccount, createProfile } from '$lib/server/accounts/repository';
+import { createAccount } from '$lib/server/accounts/repository';
 import type { DbClient } from '$lib/server/db-client';
 import { confirmImport } from '$lib/server/imports/confirm';
 import { sha256Hex } from '$lib/server/imports/shared';
@@ -87,17 +87,14 @@ function eventWithMalformedJson(id: string) {
 
 async function seedUnknownTransaction(): Promise<string> {
 	const account = await createAccount(db, { name: 'DKB Giro' });
-	const profile = await createProfile(db, {
-		accountId: account.id,
-		bankId: 'dkb',
-		label: 'DKB CSV'
-	});
+	const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 	const csv = dkbCsv([
 		'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"'
 	]);
 
 	await confirmImport(db, {
-		profileId: profile.id,
+		accountId: importAccount.accountId,
+		adapterId: importAccount.bankId,
 		csv,
 		expectedHash: await sha256Hex(csv)
 	});

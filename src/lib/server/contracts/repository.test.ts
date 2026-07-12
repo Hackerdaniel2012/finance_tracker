@@ -5,7 +5,7 @@ import {
 	createTestDbClient,
 	firstValue
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '../accounts/repository';
+import { createAccount } from '../accounts/repository';
 import type { DbClient } from '../db-client';
 import { createContract, deleteContract, listContracts, updateContract } from './repository';
 
@@ -21,15 +21,10 @@ beforeEach(async () => {
 describe('contract repository', () => {
 	it('creates, lists, updates, and deletes contracts', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'dkb',
-			label: 'DKB Giro'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 
 		const created = await createContract(db, {
 			accountId: account.id,
-			profileId: profile.id,
 			name: 'Gym',
 			payee: 'Fit Co',
 			kind: 'subscription',
@@ -41,8 +36,6 @@ describe('contract repository', () => {
 		expect(created).toMatchObject({
 			accountId: account.id,
 			accountName: 'Main Giro',
-			profileId: profile.id,
-			profileLabel: 'DKB Giro',
 			name: 'Gym',
 			payee: 'Fit Co',
 			kind: 'subscription',
@@ -57,7 +50,6 @@ describe('contract repository', () => {
 		const updated = await updateContract(db, {
 			id: created.id,
 			accountId: null,
-			profileId: null,
 			payee: null,
 			expectedAmountCents: 3499,
 			status: 'paused',
@@ -67,7 +59,6 @@ describe('contract repository', () => {
 		expect(updated).toMatchObject({
 			id: created.id,
 			accountId: null,
-			profileId: null,
 			payee: null,
 			expectedAmountCents: 3499,
 			status: 'paused',

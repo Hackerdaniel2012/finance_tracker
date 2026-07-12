@@ -4,7 +4,7 @@ import {
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '../accounts/repository';
+import { createAccount } from '../accounts/repository';
 import { createCategoryRule } from '../categories/repository';
 import type { DbClient } from '../db-client';
 import { confirmImport } from '../imports/confirm';
@@ -139,21 +139,16 @@ describe('reports repository', () => {
 
 	it('falls back to balance-after transactions and transaction deltas for net worth points', async () => {
 		const account = await createAccount(db, { name: 'N26 Main', openingBalanceCents: 100000 });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'N26 CSV'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, currency,
+					id, account_id, dedupe_key, booking_date, amount_cents, currency,
 					balance_after_cents, search_text, classification_status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.bind(
 				'tx-balance-after',
-				profile.id,
 				account.id,
 				'key-balance-after',
 				'2026-07-05',
@@ -163,7 +158,6 @@ describe('reports repository', () => {
 				'grocery',
 				'unknown',
 				'tx-without-balance',
-				profile.id,
 				account.id,
 				'key-without-balance',
 				'2026-07-07',
@@ -173,7 +167,6 @@ describe('reports repository', () => {
 				'pharmacy',
 				'unknown',
 				'tx-income',
-				profile.id,
 				account.id,
 				'key-income',
 				'2026-07-20',
@@ -198,27 +191,18 @@ describe('reports repository', () => {
 
 	it('filters net worth to a single account', async () => {
 		const accountA = await createAccount(db, { name: 'Checking', openingBalanceCents: 100000 });
-		const profileA = await createProfile(db, {
-			accountId: accountA.id,
-			bankId: 'n26',
-			label: 'N26 Main'
-		});
+		const profileA = { ...accountA, accountId: accountA.id, bankId: 'n26' as const };
 		const accountB = await createAccount(db, { name: 'Savings', openingBalanceCents: 500000 });
-		const profileB = await createProfile(db, {
-			accountId: accountB.id,
-			bankId: 'dkb',
-			label: 'DKB CSV'
-		});
+		const profileB = { ...accountB, accountId: accountB.id, bankId: 'dkb_girocard' as const };
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, currency,
+					id, account_id, dedupe_key, booking_date, amount_cents, currency,
 					search_text, classification_status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.bind(
 				'tx-a',
-				profileA.id,
 				accountA.id,
 				'key-a',
 				'2026-07-05',
@@ -227,7 +211,6 @@ describe('reports repository', () => {
 				'checking',
 				'unknown',
 				'tx-b',
-				profileB.id,
 				accountB.id,
 				'key-b',
 				'2026-07-06',
@@ -297,30 +280,15 @@ describe('reports repository', () => {
 			name: 'Trade Republic',
 			openingBalanceCents: 50000
 		});
-		const profileB = await createProfile(db, {
-			accountId: accountB.id,
-			bankId: 'trade_republic',
-			label: 'TR CSV'
-		});
+		const profileB = { ...accountB, accountId: accountB.id, bankId: 'trade_republic' as const };
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, currency,
+					id, account_id, dedupe_key, booking_date, amount_cents, currency,
 					balance_after_cents, search_text, classification_status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
-			.bind(
-				'tx-b',
-				profileB.id,
-				accountB.id,
-				'key-b',
-				'2026-07-15',
-				-10000,
-				'EUR',
-				null,
-				'broker',
-				'unknown'
-			)
+			.bind('tx-b', accountB.id, 'key-b', '2026-07-15', -10000, 'EUR', null, 'broker', 'unknown')
 			.run();
 
 		const summary = await getSummaryReport(
@@ -351,21 +319,16 @@ describe('reports repository', () => {
 
 	it('builds a balance history for a single account', async () => {
 		const account = await createAccount(db, { name: 'N26 Main', openingBalanceCents: 100000 });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'N26 CSV'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, currency,
+					id, account_id, dedupe_key, booking_date, amount_cents, currency,
 					balance_after_cents, search_text, classification_status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.bind(
 				'tx-balance-after',
-				profile.id,
 				account.id,
 				'key-balance-after',
 				'2026-07-05',
@@ -375,7 +338,6 @@ describe('reports repository', () => {
 				'grocery',
 				'unknown',
 				'tx-without-balance',
-				profile.id,
 				account.id,
 				'key-without-balance',
 				'2026-07-07',
@@ -385,7 +347,6 @@ describe('reports repository', () => {
 				'pharmacy',
 				'unknown',
 				'tx-income',
-				profile.id,
 				account.id,
 				'key-income',
 				'2026-07-20',
@@ -416,11 +377,7 @@ describe('reports repository', () => {
 
 async function seedReportData() {
 	const account = await createAccount(db, { name: 'DKB Giro', openingBalanceCents: 10000 });
-	const profile = await createProfile(db, {
-		accountId: account.id,
-		bankId: 'dkb',
-		label: 'DKB CSV'
-	});
+	const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 	await createCategoryRule(db, {
 		categoryId: 'cat-groceries',
 		name: 'Shop rule',
@@ -444,7 +401,8 @@ async function seedReportData() {
 	]);
 
 	await confirmImport(db, {
-		profileId: profile.id,
+		accountId: importAccount.accountId,
+		adapterId: importAccount.bankId,
 		csv,
 		expectedHash: await sha256Hex(csv)
 	});

@@ -25,17 +25,29 @@ describe('/api/accounts', () => {
 
 	it('creates and updates accounts', async () => {
 		const createResponse = await POST(
-			event({ name: 'Main Giro', institution: 'DKB', openingBalanceCents: 12345 })
+			event({
+				name: 'Main Giro',
+				institution: 'DKB',
+				openingBalanceCents: 12345,
+				currentBalanceCents: 23456
+			})
 		);
 
 		expect(createResponse.status).toBe(201);
 		const created = (await createResponse.json()) as {
-			account: { id: string; name: string; institution: string; openingBalanceCents: number };
+			account: {
+				id: string;
+				name: string;
+				institution: string;
+				openingBalanceCents: number;
+				currentBalanceCents: number;
+			};
 		};
 		expect(created.account).toMatchObject({
 			name: 'Main Giro',
 			institution: 'DKB',
-			openingBalanceCents: 12345
+			openingBalanceCents: 12345,
+			currentBalanceCents: 23456
 		});
 
 		const patchResponse = await PATCH(event({ id: created.account.id, name: 'Household Giro' }));
@@ -44,12 +56,22 @@ describe('/api/accounts', () => {
 		});
 	});
 
+	it('preserves custom and empty institutions', async () => {
+		const customResponse = await POST(event({ name: 'Custom Bank', institution: 'Custom Bank' }));
+		const customPayload = (await customResponse.json()) as {
+			account: { institution: string | null };
+		};
+		expect(customPayload.account.institution).toBe('Custom Bank');
+
+		const emptyResponse = await POST(event({ name: 'No Institution' }));
+		const emptyPayload = (await emptyResponse.json()) as {
+			account: { institution: string | null };
+		};
+		expect(emptyPayload.account.institution).toBeNull();
+	});
+
 	it('deletes accounts and their linked data', async () => {
 		const account = await createAccount(db, { name: 'Disposable DKB' });
-		await db
-			.prepare('INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES (?, ?, ?, ?)')
-			.bind('profile-to-delete', account.id, 'dkb', 'Disposable DKB')
-			.run();
 
 		const response = await DELETE(event({ id: account.id }));
 
@@ -57,12 +79,6 @@ describe('/api/accounts', () => {
 		await expect(response.json()).resolves.toEqual({ ok: true });
 		expect(
 			await db.prepare('SELECT id FROM accounts WHERE id = ?').bind(account.id).first()
-		).toBeNull();
-		expect(
-			await db
-				.prepare('SELECT id FROM import_profiles WHERE account_id = ?')
-				.bind(account.id)
-				.first()
 		).toBeNull();
 	});
 
@@ -83,59 +99,23 @@ describe('/api/accounts', () => {
 		await expect(response.json()).resolves.toEqual({ error: 'Request body must be valid JSON' });
 	});
 
-	it('includes linked profile data in account list', async () => {
-		const account = await createAccount(db, { name: 'Brokerage' });
-		await db
-			.prepare('INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES (?, ?, ?, ?)')
-			.bind('profile-1', account.id, 'trade_republic', 'Trade Republic')
-			.run();
-
-		const response = await GET(event());
-
-		await expect(response.json()).resolves.toMatchObject({
-			accounts: [{ id: account.id, profile: { id: 'profile-1', bankId: 'trade_republic' } }]
-		});
-	});
-
 	it('includes discovered subaccounts for N26 accounts', async () => {
 		const account = await createAccount(db, { name: 'N26' });
 		await db
-			.prepare('INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES (?, ?, ?, ?)')
-			.bind('profile-1', account.id, 'n26', 'N26 CSV')
+			.prepare(
+				`INSERT INTO transactions (
+					id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+				) VALUES (?, ?, ?, ?, ?, ?, ?)`
+			)
+			.bind('txn-1', account.id, 'dedupe-1', '2026-07-08', -100, 'coffee', 'Hauptkonto')
 			.run();
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+					id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+				) VALUES (?, ?, ?, ?, ?, ?, ?)`
 			)
-			.bind(
-				'txn-1',
-				'profile-1',
-				account.id,
-				'dedupe-1',
-				'2026-07-08',
-				-100,
-				'coffee',
-				'Hauptkonto'
-			)
-			.run();
-		await db
-			.prepare(
-				`INSERT INTO transactions (
-					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-			)
-			.bind(
-				'txn-2',
-				'profile-1',
-				account.id,
-				'dedupe-2',
-				'2026-07-09',
-				-200,
-				'groceries',
-				'20k in 2023'
-			)
+			.bind('txn-2', account.id, 'dedupe-2', '2026-07-09', -200, 'groceries', '20k in 2023')
 			.run();
 
 		const response = await GET(event());

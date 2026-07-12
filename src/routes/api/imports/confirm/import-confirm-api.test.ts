@@ -4,7 +4,7 @@ import {
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../../tests/db/test-database';
-import { createAccount, createProfile } from '$lib/server/accounts/repository';
+import { createAccount } from '$lib/server/accounts/repository';
 import type { DbClient } from '$lib/server/db-client';
 import { sha256Hex } from '$lib/server/imports/shared';
 import { POST } from './+server';
@@ -20,22 +20,18 @@ beforeEach(async () => {
 describe('/api/imports/confirm', () => {
 	it('confirms a multipart CSV import', async () => {
 		const account = await createAccount(db, { name: 'DKB Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'dkb',
-			label: 'DKB CSV'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 		const csv = dkbCsv([
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"'
 		]);
 
-		const response = await POST(event(form(profile.id, csv, await sha256Hex(csv))));
+		const response = await POST(event(form(account.id, csv, await sha256Hex(csv))));
 
 		expect(response.status).toBe(201);
 		await expect(response.json()).resolves.toMatchObject({
 			report: {
-				profileId: profile.id,
-				adapterId: 'dkb',
+				accountId: account.id,
+				adapterId: 'dkb_girocard',
 				rowCount: 1,
 				importedCount: 1,
 				duplicateCount: 0,
@@ -46,13 +42,13 @@ describe('/api/imports/confirm', () => {
 	});
 
 	it('returns validation errors for hash mismatch, missing files, and malformed form data', async () => {
-		const mismatch = await POST(event(form('profile-1', 'csv', 'bad')));
+		const mismatch = await POST(event(form('importAccount-1', 'csv', 'bad')));
 		expect(mismatch.status).toBe(400);
 		await expect(mismatch.json()).resolves.toEqual({
 			error: 'File hash does not match preview'
 		});
 
-		const missingFile = await POST(event(form('profile-1', undefined, 'hash')));
+		const missingFile = await POST(event(form('importAccount-1', undefined, 'hash')));
 		expect(missingFile.status).toBe(400);
 		await expect(missingFile.json()).resolves.toEqual({ error: 'file is required' });
 
@@ -64,9 +60,10 @@ describe('/api/imports/confirm', () => {
 	});
 });
 
-function form(profileId: string, csv: string | undefined, expectedHash: string): FormData {
+function form(accountId: string, csv: string | undefined, expectedHash: string): FormData {
 	const data = new FormData();
-	data.set('profileId', profileId);
+	data.set('accountId', accountId);
+	data.set('adapterId', 'dkb_girocard');
 	data.set('expectedHash', expectedHash);
 
 	if (csv !== undefined) {

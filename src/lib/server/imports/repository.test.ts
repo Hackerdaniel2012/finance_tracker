@@ -5,7 +5,7 @@ import {
 	createTestDbClient,
 	firstValue
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '../accounts/repository';
+import { createAccount } from '../accounts/repository';
 import type { DbClient } from '../db-client';
 import { confirmImport } from './confirm';
 import { deleteImportBatch, listImportBatches } from './repository';
@@ -22,12 +22,13 @@ beforeEach(async () => {
 
 describe('import batch repository', () => {
 	it('lists import batch metadata with account context', async () => {
-		const profile = await createDkbProfile();
+		const importAccount = await createDkbAccount();
 		const csv = dkbCsv([
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"'
 		]);
 		const report = await confirmImport(db, {
-			profileId: profile.id,
+			accountId: importAccount.accountId,
+			adapterId: importAccount.bankId,
 			csv,
 			expectedHash: await sha256Hex(csv)
 		});
@@ -37,10 +38,9 @@ describe('import batch repository', () => {
 		expect(batches).toEqual([
 			expect.objectContaining({
 				id: report.batchId,
-				profileId: profile.id,
-				accountId: profile.accountId,
+				accountId: importAccount.accountId,
 				accountName: 'DKB Giro',
-				adapterId: 'dkb',
+				adapterId: 'dkb_girocard',
 				rowCount: 1,
 				importedCount: 1,
 				duplicateCount: 0,
@@ -51,13 +51,14 @@ describe('import batch repository', () => {
 	});
 
 	it('deletes a batch and cascades imported transactions and errors', async () => {
-		const profile = await createDkbProfile();
+		const importAccount = await createDkbAccount();
 		const csv = dkbCsv([
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"',
 			'"09.07.26";"09.07.26";"Gebucht";"Me";"Bad";"Broken";"Ausgang";"DE";"not-money";"";"";"ref-bad"'
 		]);
 		const report = await confirmImport(db, {
-			profileId: profile.id,
+			accountId: importAccount.accountId,
+			adapterId: importAccount.bankId,
 			csv,
 			expectedHash: await sha256Hex(csv)
 		});
@@ -75,9 +76,9 @@ describe('import batch repository', () => {
 	});
 });
 
-async function createDkbProfile() {
+async function createDkbAccount() {
 	const account = await createAccount(db, { name: 'DKB Giro' });
-	return createProfile(db, { accountId: account.id, bankId: 'dkb', label: 'DKB CSV' });
+	return { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 }
 
 function dkbCsv(rows: string[]): string {

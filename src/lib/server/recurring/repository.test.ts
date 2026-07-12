@@ -4,7 +4,7 @@ import {
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '../accounts/repository';
+import { createAccount } from '../accounts/repository';
 import type { DbClient } from '../db-client';
 import {
 	generateRecurringSuggestions,
@@ -24,14 +24,9 @@ beforeEach(async () => {
 describe('recurring repository', () => {
 	it('lists and updates recurring groups', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'N26 Main'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
 		const id = await insertRecurringGroup({
 			accountId: account.id,
-			profileId: profile.id,
 			payee: 'Rent',
 			cadence: 'monthly',
 			expectedAmountCents: 90000,
@@ -43,7 +38,6 @@ describe('recurring repository', () => {
 			{
 				id,
 				accountName: 'Main Giro',
-				profileLabel: 'N26 Main',
 				payee: 'Rent',
 				cadence: 'monthly',
 				expectedAmountCents: 90000,
@@ -58,7 +52,6 @@ describe('recurring repository', () => {
 		const updated = await updateRecurringGroup(db, {
 			id,
 			accountId: null,
-			profileId: null,
 			label: 'Home rent',
 			payee: 'Warm Rent',
 			status: 'confirmed',
@@ -70,7 +63,6 @@ describe('recurring repository', () => {
 		expect(updated).toMatchObject({
 			id,
 			accountId: null,
-			profileId: null,
 			payee: 'Warm Rent',
 			label: 'Home rent',
 			status: 'confirmed',
@@ -93,14 +85,9 @@ describe('recurring repository', () => {
 
 	it('suggests monthly recurring groups after three stable similar transactions', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'N26 Main'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Power Co',
 			bookingDate: '2026-04-15',
@@ -108,7 +95,6 @@ describe('recurring repository', () => {
 		});
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Power Co',
 			bookingDate: '2026-05-15',
@@ -116,7 +102,6 @@ describe('recurring repository', () => {
 		});
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Power Co',
 			bookingDate: '2026-06-14',
@@ -126,7 +111,6 @@ describe('recurring repository', () => {
 		await expect(generateRecurringSuggestions(db)).resolves.toEqual([
 			expect.objectContaining({
 				accountId: account.id,
-				profileId: profile.id,
 				categoryId: 'cat-utilities',
 				payee: 'Power Co',
 				cadence: 'monthly',
@@ -142,27 +126,19 @@ describe('recurring repository', () => {
 
 	it('suggests weekly, biweekly, quarterly, and yearly recurring groups', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'N26 Main'
-		});
-		await insertStableSeries(account.id, profile.id, 'Weekly News', [
-			'2026-06-01',
-			'2026-06-08',
-			'2026-06-15'
-		]);
-		await insertStableSeries(account.id, profile.id, 'Biweekly Cleaning', [
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
+		await insertStableSeries(account.id, 'Weekly News', ['2026-06-01', '2026-06-08', '2026-06-15']);
+		await insertStableSeries(account.id, 'Biweekly Cleaning', [
 			'2026-06-02',
 			'2026-06-16',
 			'2026-06-30'
 		]);
-		await insertStableSeries(account.id, profile.id, 'Quarterly Tax', [
+		await insertStableSeries(account.id, 'Quarterly Tax', [
 			'2025-12-31',
 			'2026-03-31',
 			'2026-06-30'
 		]);
-		await insertStableSeries(account.id, profile.id, 'Yearly Domain', [
+		await insertStableSeries(account.id, 'Yearly Domain', [
 			'2024-07-01',
 			'2025-07-01',
 			'2026-07-01'
@@ -199,14 +175,9 @@ describe('recurring repository', () => {
 
 	it('does not suggest recurring groups for fewer than three or unstable transactions', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'N26 Main'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Two Count',
 			bookingDate: '2026-05-01',
@@ -214,7 +185,6 @@ describe('recurring repository', () => {
 		});
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Two Count',
 			bookingDate: '2026-06-01',
@@ -222,7 +192,6 @@ describe('recurring repository', () => {
 		});
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Irregular Co',
 			bookingDate: '2026-04-01',
@@ -230,7 +199,6 @@ describe('recurring repository', () => {
 		});
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Irregular Co',
 			bookingDate: '2026-05-01',
@@ -238,7 +206,6 @@ describe('recurring repository', () => {
 		});
 		await insertTransaction({
 			accountId: account.id,
-			profileId: profile.id,
 			categoryId: 'cat-utilities',
 			payee: 'Irregular Co',
 			bookingDate: '2026-05-12',
@@ -250,15 +217,10 @@ describe('recurring repository', () => {
 
 	it('excludes paired internal transfers from recurring suggestions', async () => {
 		const account = await createAccount(db, { name: 'Main Giro' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'Main'
-		});
+		const savings = await createAccount(db, { name: 'Savings' });
 		for (const bookingDate of ['2026-04-01', '2026-05-01', '2026-06-01']) {
 			await insertTransaction({
-				accountId: account.id,
-				profileId: profile.id,
+				accountId: savings.id,
 				categoryId: 'cat-unknown',
 				payee: 'Savings',
 				bookingDate,
@@ -266,7 +228,6 @@ describe('recurring repository', () => {
 			});
 			await insertTransaction({
 				accountId: account.id,
-				profileId: profile.id,
 				categoryId: 'cat-unknown',
 				payee: 'Main',
 				bookingDate,
@@ -279,7 +240,6 @@ describe('recurring repository', () => {
 
 async function insertRecurringGroup(input: {
 	accountId?: string | null;
-	profileId?: string | null;
 	payee: string;
 	cadence?: string;
 	expectedAmountCents?: number;
@@ -292,14 +252,13 @@ async function insertRecurringGroup(input: {
 	await db
 		.prepare(
 			`INSERT INTO recurring_groups (
-				id, account_id, profile_id, category_id, payee, direction, cadence,
+				id, account_id, category_id, payee, direction, cadence,
 				expected_amount_cents, next_date, confidence
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			id,
 			input.accountId ?? null,
-			input.profileId ?? null,
 			input.categoryId === undefined ? 'cat-utilities' : input.categoryId,
 			input.payee,
 			input.direction === undefined ? 'outgoing' : input.direction,
@@ -313,16 +272,10 @@ async function insertRecurringGroup(input: {
 	return id;
 }
 
-async function insertStableSeries(
-	accountId: string,
-	profileId: string,
-	payee: string,
-	bookingDates: string[]
-) {
+async function insertStableSeries(accountId: string, payee: string, bookingDates: string[]) {
 	for (const bookingDate of bookingDates) {
 		await insertTransaction({
 			accountId,
-			profileId,
 			categoryId: 'cat-utilities',
 			payee,
 			bookingDate,
@@ -333,7 +286,6 @@ async function insertStableSeries(
 
 async function insertTransaction(input: {
 	accountId: string;
-	profileId: string;
 	categoryId: string;
 	payee: string;
 	bookingDate: string;
@@ -342,13 +294,12 @@ async function insertTransaction(input: {
 	await db
 		.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, category_id, dedupe_key, booking_date,
+				id, account_id, category_id, dedupe_key, booking_date,
 				amount_cents, payee, search_text
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			crypto.randomUUID(),
-			input.profileId,
 			input.accountId,
 			input.categoryId,
 			`${input.payee}-${input.bookingDate}`,

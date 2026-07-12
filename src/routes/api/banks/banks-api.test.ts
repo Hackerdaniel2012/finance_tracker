@@ -7,13 +7,16 @@ describe('/api/banks', () => {
 
 		await expect(response.json()).resolves.toEqual({
 			banks: [
-				expect.objectContaining({ id: 'n26', label: 'N26', status: 'enabled' }),
+				expect.objectContaining({ id: 'n26', status: 'enabled' }),
 				expect.objectContaining({
 					id: 'trade_republic',
-					label: 'Trade Republic',
 					status: 'enabled'
 				}),
-				expect.objectContaining({ id: 'dkb', label: 'DKB', status: 'enabled' })
+				expect.objectContaining({ id: 'dkb_girocard', status: 'enabled' }),
+				expect.objectContaining({
+					id: 'dkb_creditcard',
+					status: 'enabled'
+				})
 			]
 		});
 	});

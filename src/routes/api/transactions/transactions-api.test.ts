@@ -4,7 +4,7 @@ import {
 	createTestDatabase,
 	createTestDbClient
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '$lib/server/accounts/repository';
+import { createAccount } from '$lib/server/accounts/repository';
 import { createCategoryRule } from '$lib/server/categories/repository';
 import type { DbClient } from '$lib/server/db-client';
 import { confirmImport } from '$lib/server/imports/confirm';
@@ -103,11 +103,7 @@ describe('/api/transactions', () => {
 
 async function seedN26Transactions() {
 	const account = await createAccount(db, { name: 'N26' });
-	const profile = await createProfile(db, {
-		accountId: account.id,
-		bankId: 'n26',
-		label: 'N26 CSV'
-	});
+	const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
 	const csv = n26Csv([
 		'2026-07-08,,Shop,DE,"Debit Transfer",Groceries,"Hauptkonto",-12.34,,,',
 		'2026-07-09,,Cafe,DE,"Debit Transfer",Coffee,"Hauptkonto",-4.00,,,',
@@ -115,7 +111,8 @@ async function seedN26Transactions() {
 	]);
 
 	await confirmImport(db, {
-		profileId: profile.id,
+		accountId: importAccount.accountId,
+		adapterId: importAccount.bankId,
 		csv,
 		expectedHash: await sha256Hex(csv)
 	});
@@ -139,11 +136,7 @@ function event(url: string) {
 
 async function seedTransactions() {
 	const account = await createAccount(db, { name: 'DKB Giro' });
-	const profile = await createProfile(db, {
-		accountId: account.id,
-		bankId: 'dkb',
-		label: 'DKB CSV'
-	});
+	const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 	await createCategoryRule(db, {
 		categoryId: 'cat-groceries',
 		name: 'Shop rule',
@@ -159,7 +152,8 @@ async function seedTransactions() {
 	]);
 
 	await confirmImport(db, {
-		profileId: profile.id,
+		accountId: importAccount.accountId,
+		adapterId: importAccount.bankId,
 		csv,
 		expectedHash: await sha256Hex(csv)
 	});

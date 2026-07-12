@@ -5,7 +5,7 @@ import {
 	createTestDbClient,
 	firstValue
 } from '../../../../tests/db/test-database';
-import { createAccount, createProfile } from '$lib/server/accounts/repository';
+import { createAccount } from '$lib/server/accounts/repository';
 import type { DbClient } from '$lib/server/db-client';
 import { confirmImport } from '$lib/server/imports/confirm';
 import { sha256Hex } from '$lib/server/imports/shared';
@@ -22,12 +22,13 @@ beforeEach(async () => {
 
 describe('/api/imports', () => {
 	it('lists import batch metadata', async () => {
-		const profile = await createDkbProfile();
+		const importAccount = await createDkbAccount();
 		const csv = dkbCsv([
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"'
 		]);
 		const report = await confirmImport(db, {
-			profileId: profile.id,
+			accountId: importAccount.accountId,
+			adapterId: importAccount.bankId,
 			csv,
 			expectedHash: await sha256Hex(csv)
 		});
@@ -38,9 +39,9 @@ describe('/api/imports', () => {
 			imports: [
 				{
 					id: report.batchId,
-					profileId: profile.id,
+					accountId: importAccount.accountId,
 					accountName: 'DKB Giro',
-					adapterId: 'dkb',
+					adapterId: 'dkb_girocard',
 					rowCount: 1,
 					importedCount: 1
 				}
@@ -56,9 +57,9 @@ function event() {
 	} as Parameters<typeof GET>[0];
 }
 
-async function createDkbProfile() {
+async function createDkbAccount() {
 	const account = await createAccount(db, { name: 'DKB Giro' });
-	return createProfile(db, { accountId: account.id, bankId: 'dkb', label: 'DKB CSV' });
+	return { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 }
 
 function dkbCsv(rows: string[]): string {

@@ -16,12 +16,7 @@ beforeEach(async () => {
 	await db.prepare("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main')").run();
 	await db
 		.prepare(
-			"INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES ('profile-1', 'account-1', 'n26', 'Main')"
-		)
-		.run();
-	await db
-		.prepare(
-			"INSERT INTO transactions (id, profile_id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text) VALUES ('txn-1', 'profile-1', 'account-1', 'one', '2026-07-01', -500, 'Cafe Central', 'Cafe Central')"
+			"INSERT INTO transactions (id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text) VALUES ('txn-1', 'account-1', 'one', '2026-07-01', -500, 'Cafe Central', 'Cafe Central')"
 		)
 		.run();
 });

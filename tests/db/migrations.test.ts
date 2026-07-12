@@ -8,6 +8,11 @@ const seedCategoriesMigrationPath = resolve('migrations/0002_seed_default_catego
 const subaccountMigrationPath = resolve('migrations/0003_add_transaction_subaccount.sql');
 const recurringV2MigrationPath = resolve('migrations/0004_recurring_detector_v2.sql');
 const recurringLabelsMigrationPath = resolve('migrations/0006_add_recurring_labels.sql');
+const dkbCreditcardMigrationPath = resolve('migrations/0007_add_dkb_creditcard_scheme.sql');
+const dkbNamingMigrationPath = resolve(
+	'migrations/0008_rename_dkb_girocard_remove_profile_label.sql'
+);
+const profileRemovalMigrationPath = resolve('migrations/0009_remove_import_profiles.sql');
 
 const expectedTables = [
 	'account_balance_snapshots',
@@ -30,6 +35,122 @@ const expectedTables = [
 ];
 
 describe('D1 migrations', () => {
+	it('removes profiles while preserving all account-owned data and relationships', async () => {
+		const db = await createTestDatabase();
+		applySql(db, await readFile(initialMigrationPath, 'utf8'));
+		applySql(db, await readFile(subaccountMigrationPath, 'utf8'));
+		applySql(db, await readFile(recurringV2MigrationPath, 'utf8'));
+		applySql(db, await readFile(recurringLabelsMigrationPath, 'utf8'));
+		applySql(db, await readFile(dkbCreditcardMigrationPath, 'utf8'));
+		applySql(db, await readFile(dkbNamingMigrationPath, 'utf8'));
+		db.run("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main Giro')");
+		db.run("INSERT INTO categories (id, name, type) VALUES ('category-1', 'Groceries', 'expense')");
+		db.run(
+			"INSERT INTO import_profiles (id, account_id, bank_id) VALUES ('profile-1', 'account-1', 'dkb_girocard')"
+		);
+		db.run(
+			"INSERT INTO import_batches (id, profile_id, file_hash, adapter_id) VALUES ('batch-1', 'profile-1', 'hash-1', 'dkb_girocard')"
+		);
+		db.run("INSERT INTO tags (id, name) VALUES ('tag-1', 'Essential')");
+		db.run(`INSERT INTO transactions (
+			id, profile_id, account_id, import_batch_id, category_id, dedupe_key, booking_date,
+			amount_cents, note, search_text, classification_status, created_at, updated_at
+		) VALUES (
+			'txn-1', 'profile-1', 'account-1', 'batch-1', 'category-1', 'dedupe-1', '2026-07-01',
+			-1234, 'keep me', 'shop', 'manual', '2026-07-02 03:04:05', '2026-07-03 04:05:06'
+		)`);
+		db.run(
+			"INSERT INTO import_row_errors (id, import_batch_id, profile_id, row_number, code, message) VALUES ('error-1', 'batch-1', 'profile-1', 7, 'invalid_amount', 'Bad amount')"
+		);
+		db.run("INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ('txn-1', 'tag-1')");
+		db.run(
+			"INSERT INTO transaction_review_flags (id, transaction_id, reason) VALUES ('flag-1', 'txn-1', 'manual_review')"
+		);
+		db.run(
+			"INSERT INTO recurring_groups (id, profile_id, category_id, label, payee, direction, canonical_payee_key, cadence, expected_amount_cents, source) VALUES ('group-1', 'profile-1', 'category-1', 'Power', 'Power Co', 'outgoing', 'power co', 'monthly', 1234, 'imported')"
+		);
+		db.run(
+			"INSERT INTO recurring_group_transactions (recurring_group_id, transaction_id) VALUES ('group-1', 'txn-1')"
+		);
+		db.run(
+			"INSERT INTO contracts (id, profile_id, category_id, name, kind, cadence, expected_amount_cents, next_date) VALUES ('contract-1', 'profile-1', 'category-1', 'Gym', 'subscription', 'monthly', 2500, '2026-08-01')"
+		);
+
+		applySql(db, await readFile(profileRemovalMigrationPath, 'utf8'));
+
+		expect(tableNames(db)).not.toContain('import_profiles');
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM accounts')).toBe(1);
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM categories')).toBe(1);
+		expect(
+			firstValue<string>(
+				db,
+				"SELECT account_id || ':' || adapter_id FROM import_batches WHERE id = 'batch-1'"
+			)
+		).toBe('account-1:dkb_girocard');
+		expect(
+			firstValue<string>(
+				db,
+				"SELECT account_id || ':' || note || ':' || classification_status FROM transactions WHERE id = 'txn-1'"
+			)
+		).toBe('account-1:keep me:manual');
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM import_row_errors')).toBe(1);
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM transaction_tags')).toBe(1);
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM transaction_review_flags')).toBe(1);
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM recurring_group_transactions')).toBe(1);
+		expect(
+			firstValue<string>(db, "SELECT account_id FROM recurring_groups WHERE id = 'group-1'")
+		).toBe('account-1');
+		expect(firstValue<string>(db, "SELECT account_id FROM contracts WHERE id = 'contract-1'")).toBe(
+			'account-1'
+		);
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM pragma_foreign_key_check')).toBe(0);
+		expect(indexNames(db)).toEqual(
+			expect.arrayContaining([
+				'idx_import_batches_account_created',
+				'idx_transactions_account_date'
+			])
+		);
+
+		db.run("DELETE FROM accounts WHERE id = 'account-1'");
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM import_batches')).toBe(0);
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM transactions')).toBe(0);
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM recurring_groups')).toBe(0);
+		expect(
+			firstValue<number>(
+				db,
+				"SELECT COUNT(*) FROM contracts WHERE id = 'contract-1' AND account_id IS NULL"
+			)
+		).toBe(1);
+	});
+	it('adds the DKB credit card scheme while preserving existing profiles and batches', async () => {
+		const db = await createTestDatabase();
+		applySql(db, await readFile(initialMigrationPath, 'utf8'));
+		db.run(
+			"INSERT INTO accounts (id, name) VALUES ('account-1', 'Main Giro'), ('account-2', 'Credit Card')"
+		);
+		db.run(
+			"INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES ('profile-1', 'account-1', 'dkb', 'DKB Giro')"
+		);
+		db.run(
+			"INSERT INTO import_batches (id, profile_id, file_hash, adapter_id) VALUES ('batch-1', 'profile-1', 'hash-1', 'dkb')"
+		);
+
+		applySql(db, await readFile(dkbCreditcardMigrationPath, 'utf8'));
+		db.run(
+			"INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES ('profile-2', 'account-2', 'dkb_creditcard', 'DKB Credit Card')"
+		);
+		db.run(
+			"INSERT INTO import_batches (id, profile_id, file_hash, adapter_id) VALUES ('batch-2', 'profile-2', 'hash-2', 'dkb_creditcard')"
+		);
+
+		expect(
+			firstValue<string>(db, "SELECT bank_id FROM import_profiles WHERE id = 'profile-1'")
+		).toBe('dkb');
+		expect(
+			firstValue<string>(db, "SELECT adapter_id FROM import_batches WHERE id = 'batch-1'")
+		).toBe('dkb');
+	});
+
 	it('adds nullable labels to recurring groups', async () => {
 		const db = await createTestDatabase();
 		applySql(db, await readFile(initialMigrationPath, 'utf8'));
@@ -44,6 +165,35 @@ describe('D1 migrations', () => {
 			'Home rent'
 		);
 	});
+
+	it('renames the DKB girocard scheme and removes import profile labels', async () => {
+		const db = await createTestDatabase();
+		applySql(db, await readFile(initialMigrationPath, 'utf8'));
+		applySql(db, await readFile(dkbCreditcardMigrationPath, 'utf8'));
+		db.run("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main Giro')");
+		db.run(
+			"INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES ('profile-1', 'account-1', 'dkb', 'Old label')"
+		);
+		db.run(
+			"INSERT INTO import_batches (id, profile_id, file_hash, adapter_id) VALUES ('batch-1', 'profile-1', 'hash-1', 'dkb')"
+		);
+
+		applySql(db, await readFile(dkbNamingMigrationPath, 'utf8'));
+
+		expect(
+			firstValue<string>(db, "SELECT bank_id FROM import_profiles WHERE id = 'profile-1'")
+		).toBe('dkb_girocard');
+		expect(
+			firstValue<string>(db, "SELECT adapter_id FROM import_batches WHERE id = 'batch-1'")
+		).toBe('dkb_girocard');
+		expect(
+			firstValue<number>(
+				db,
+				"SELECT COUNT(*) FROM pragma_table_info('import_profiles') WHERE name = 'label'"
+			)
+		).toBe(0);
+	});
+
 	it('applies the initial schema with every V1 table', async () => {
 		const db = await createTestDatabase();
 		const migration = await readFile(initialMigrationPath, 'utf8');

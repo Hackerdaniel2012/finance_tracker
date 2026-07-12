@@ -21,15 +21,12 @@ describe('/api/category-rules/apply', () => {
 	it('re-applies seeded rules to existing transactions and resolves review flags', async () => {
 		db.prepare("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main')").run();
 		db.prepare(
-			"INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES ('profile-1', 'account-1', 'n26', 'Main')"
-		).run();
-		db.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, payee, description, search_text, category_id, classification_status
+				id, account_id, dedupe_key, booking_date, amount_cents, payee, description, search_text, category_id, classification_status
 			) VALUES
-				('txn-1', 'profile-1', 'account-1', 'd1', '2026-07-01', -1234, 'REWE Markt', 'Presentment Hauptkonto', 'rewe markt presentment hauptkonto', NULL, 'unknown'),
-				('txn-2', 'profile-1', 'account-1', 'd2', '2026-07-02', 250000, 'Biontech SE', 'Lohn Gehalt', 'biontech se lohn gehalt', NULL, 'unknown'),
-				('txn-3', 'profile-1', 'account-1', 'd3', '2026-07-03', -999, 'Cafe', 'Coffee', 'cafe coffee', 'cat-leisure', 'auto')`
+				('txn-1', 'account-1', 'd1', '2026-07-01', -1234, 'REWE Markt', 'Presentment Hauptkonto', 'rewe markt presentment hauptkonto', NULL, 'unknown'),
+				('txn-2', 'account-1', 'd2', '2026-07-02', 250000, 'Biontech SE', 'Lohn Gehalt', 'biontech se lohn gehalt', NULL, 'unknown'),
+				('txn-3', 'account-1', 'd3', '2026-07-03', -999, 'Cafe', 'Coffee', 'cafe coffee', 'cat-leisure', 'auto')`
 		).run();
 		db.prepare(
 			"INSERT INTO transaction_review_flags (id, transaction_id, reason) VALUES ('flag-1', 'txn-1', 'unknown_category'), ('flag-2', 'txn-2', 'unknown_category')"
@@ -46,27 +43,29 @@ describe('/api/category-rules/apply', () => {
 			matchedCount: 2,
 			unmatchedCount: 1
 		});
-		expect(firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-1'")).toBe(
-			'cat-groceries'
-		);
-		expect(firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-2'")).toBe(
-			'cat-salary'
-		);
-		expect(firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-3'")).toBeNull();
 		expect(
-			firstValue<number>(sqlite, "SELECT COUNT(*) FROM transaction_review_flags WHERE status = 'open'")
+			firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-1'")
+		).toBe('cat-groceries');
+		expect(
+			firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-2'")
+		).toBe('cat-salary');
+		expect(
+			firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-3'")
+		).toBeNull();
+		expect(
+			firstValue<number>(
+				sqlite,
+				"SELECT COUNT(*) FROM transaction_review_flags WHERE status = 'open'"
+			)
 		).toBe(1);
 	});
 
 	it('leaves manually classified transactions unchanged', async () => {
 		db.prepare("INSERT INTO accounts (id, name) VALUES ('account-1', 'Main')").run();
 		db.prepare(
-			"INSERT INTO import_profiles (id, account_id, bank_id, label) VALUES ('profile-1', 'account-1', 'n26', 'Main')"
-		).run();
-		db.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text, category_id, classification_status
-			) VALUES ('txn-1', 'profile-1', 'account-1', 'd1', '2026-07-01', -1234, 'REWE Markt', 'rewe markt', 'cat-leisure', 'manual')`
+				id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text, category_id, classification_status
+			) VALUES ('txn-1', 'account-1', 'd1', '2026-07-01', -1234, 'REWE Markt', 'rewe markt', 'cat-leisure', 'manual')`
 		).run();
 
 		const response = await POST(event());
@@ -75,9 +74,9 @@ describe('/api/category-rules/apply', () => {
 		};
 
 		expect(body.result).toMatchObject({ updatedCount: 0, matchedCount: 0, unmatchedCount: 0 });
-		expect(firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-1'")).toBe(
-			'cat-leisure'
-		);
+		expect(
+			firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'txn-1'")
+		).toBe('cat-leisure');
 	});
 });
 

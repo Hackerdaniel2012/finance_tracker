@@ -5,7 +5,7 @@ import {
 	createTestDbClient,
 	firstValue
 } from '../../../../../tests/db/test-database';
-import { createAccount, createProfile } from '$lib/server/accounts/repository';
+import { createAccount } from '$lib/server/accounts/repository';
 import type { DbClient } from '$lib/server/db-client';
 import { DELETE, GET } from './+server';
 
@@ -39,18 +39,14 @@ describe('/api/accounts/:id', () => {
 
 	it('deletes an account and its linked data', async () => {
 		const account = await createAccount(db, { name: 'Disposable DKB' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'dkb',
-			label: 'Disposable DKB'
-		});
+		const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text
-				) VALUES (?, ?, ?, ?, ?, ?, ?)`
+					id, account_id, dedupe_key, booking_date, amount_cents, search_text
+				) VALUES (?, ?, ?, ?, ?, ?)`
 			)
-			.bind('txn-1', profile.id, account.id, 'dedupe-1', '2026-07-08', -100, 'coffee')
+			.bind('txn-1', account.id, 'dedupe-1', '2026-07-08', -100, 'coffee')
 			.run();
 
 		const response = await DELETE(event(account.id));
@@ -58,7 +54,6 @@ describe('/api/accounts/:id', () => {
 		expect(response.status).toBe(200);
 		await expect(response.json()).resolves.toEqual({ ok: true });
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM accounts')).toBe(0);
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_profiles')).toBe(0);
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(0);
 	});
 

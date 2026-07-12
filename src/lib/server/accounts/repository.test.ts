@@ -5,19 +5,9 @@ import {
 	createTestDbClient
 } from '../../../../tests/db/test-database';
 import type { DbClient } from '../db-client';
-import { ConflictError, NotFoundError, ValidationError } from './errors';
-import {
-	createAccount,
-	createProfile,
-	listAccounts,
-	listProfiles,
-	updateAccount
-} from './repository';
-import {
-	parseCreateAccountInput,
-	parseCreateProfileInput,
-	parseUpdateAccountInput
-} from './validation';
+import { NotFoundError, ValidationError } from './errors';
+import { createAccount, listAccounts, updateAccount } from './repository';
+import { parseCreateAccountInput, parseUpdateAccountInput } from './validation';
 
 let db: DbClient;
 
@@ -43,7 +33,7 @@ describe('account repository', () => {
 			currentBalanceCents: null
 		});
 
-		await expect(listAccounts(db)).resolves.toMatchObject([{ id: account.id, profile: null }]);
+		await expect(listAccounts(db)).resolves.toMatchObject([{ id: account.id }]);
 
 		const updated = await updateAccount(db, {
 			id: account.id,
@@ -58,33 +48,7 @@ describe('account repository', () => {
 		});
 	});
 
-	it('creates one import profile per account', async () => {
-		const account = await createAccount(db, { name: 'Brokerage' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'trade_republic',
-			label: 'Trade Republic CSV'
-		});
-
-		expect(profile).toMatchObject({
-			accountId: account.id,
-			bankId: 'trade_republic',
-			label: 'Trade Republic CSV',
-			status: 'active'
-		});
-		await expect(listProfiles(db)).resolves.toMatchObject([{ id: profile.id }]);
-		await expect(listAccounts(db)).resolves.toMatchObject([
-			{ id: account.id, profile: { id: profile.id, bankId: 'trade_republic' } }
-		]);
-		await expect(
-			createProfile(db, { accountId: account.id, bankId: 'n26', label: 'Duplicate' })
-		).rejects.toBeInstanceOf(ConflictError);
-	});
-
-	it('rejects profiles for unknown accounts and account updates for unknown ids', async () => {
-		await expect(
-			createProfile(db, { accountId: 'missing', bankId: 'dkb', label: 'DKB' })
-		).rejects.toBeInstanceOf(NotFoundError);
+	it('rejects account updates for unknown ids', async () => {
 		await expect(updateAccount(db, { id: 'missing', name: 'Nope' })).rejects.toBeInstanceOf(
 			NotFoundError
 		);
@@ -93,41 +57,26 @@ describe('account repository', () => {
 	it('lists distinct subaccounts for an account from its transactions', async () => {
 		const account = await createAccount(db, { name: 'N26' });
 		const otherAccount = await createAccount(db, { name: 'DKB' });
-		const profile = await createProfile(db, {
-			accountId: account.id,
-			bankId: 'n26',
-			label: 'N26 CSV'
-		});
-
 		db.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+				id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`
 		)
-			.bind('txn-1', profile.id, account.id, 'dedupe-1', '2026-07-08', -100, 'coffee', 'Hauptkonto')
+			.bind('txn-1', account.id, 'dedupe-1', '2026-07-08', -100, 'coffee', 'Hauptkonto')
 			.run();
 		db.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+				id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`
 		)
-			.bind(
-				'txn-2',
-				profile.id,
-				account.id,
-				'dedupe-2',
-				'2026-07-09',
-				-200,
-				'groceries',
-				'20k in 2023'
-			)
+			.bind('txn-2', account.id, 'dedupe-2', '2026-07-09', -200, 'groceries', '20k in 2023')
 			.run();
 		db.prepare(
 			`INSERT INTO transactions (
-				id, profile_id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+				id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`
 		)
-			.bind('txn-3', profile.id, account.id, 'dedupe-3', '2026-07-10', -300, 'fuel', 'Hauptkonto')
+			.bind('txn-3', account.id, 'dedupe-3', '2026-07-10', -300, 'fuel', 'Hauptkonto')
 			.run();
 
 		const accounts = await listAccounts(db);
@@ -144,7 +93,7 @@ describe('account repository', () => {
 });
 
 describe('account validation', () => {
-	it('parses valid account and profile payloads', () => {
+	it('parses valid account payloads', () => {
 		expect(parseCreateAccountInput({ name: ' Main ', openingBalanceCents: 100 })).toEqual({
 			name: 'Main',
 			institution: undefined,
@@ -156,20 +105,10 @@ describe('account validation', () => {
 			id: 'account-1',
 			institution: null
 		});
-		expect(
-			parseCreateProfileInput({ accountId: 'account-1', bankId: 'dkb', label: ' DKB ' })
-		).toEqual({
-			accountId: 'account-1',
-			bankId: 'dkb',
-			label: 'DKB'
-		});
 	});
 
 	it('rejects malformed payloads', () => {
 		expect(() => parseCreateAccountInput({ name: '' })).toThrow(ValidationError);
 		expect(() => parseUpdateAccountInput({ id: 'account-1' })).toThrow(ValidationError);
-		expect(() =>
-			parseCreateProfileInput({ accountId: 'account-1', bankId: 'unknown', label: 'Bad' })
-		).toThrow(ValidationError);
 	});
 });

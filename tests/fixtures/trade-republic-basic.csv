@@ -1,0 +1,4 @@
+"datetime","date","account_type","category","type","asset_class","name","symbol","shares","price","amount","fee","tax","currency","original_amount","original_currency","fx_rate","description","transaction_id","counterparty_name","counterparty_iban","payment_reference","mcc_code"
+"2026-07-01T00:00:00.000Z","2026-07-01","DEFAULT","CASH","CUSTOMER_INBOUND","","Synthetic deposit","","","","1000.00","","","EUR","","","","Synthetic fixture","synthetic-tr-1","Example User","DE00000000000000000000","Synthetic deposit",""
+"2026-07-02T00:00:00.000Z","2026-07-02","DEFAULT","SECURITIES","ORDER_EXECUTED","EQUITY","Example Fund","EXAMPLE","1","100.00","-100.00","","","EUR","","","","Synthetic fixture","synthetic-tr-2","","","Synthetic purchase",""
+"2026-07-03T00:00:00.000Z","2026-07-03","DEFAULT","CASH","INFORMATION","","Ignored row","","","","","","","EUR","","","","Synthetic empty amount","synthetic-tr-3","","","",""

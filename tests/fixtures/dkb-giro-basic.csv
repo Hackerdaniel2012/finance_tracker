@@ -1,0 +1,7 @@
+"Girokonto";"DE00000000000000000000"
+"Zeitraum";"01.07.2026 - 31.07.2026"
+""
+"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"
+"01.07.26";"01.07.26";"Gebucht";"Example User";"Example Market";"Synthetic groceries";"Ausgang";"DE00000000000000000000";"42,50";"";"";"synthetic-dkb-1"
+"02.07.26";"02.07.26";"Gebucht";"Example Employer";"Example User";"Synthetic salary";"Eingang";"DE00000000000000000000";"2500,00";"";"";"synthetic-dkb-2"
+"03.07.26";"03.07.26";"Gebucht";"Example User";"Example Cafe";"Synthetic coffee";"Ausgang";"DE00000000000000000000";"4,00";"";"";"synthetic-dkb-3"

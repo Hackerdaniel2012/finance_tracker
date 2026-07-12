@@ -1,0 +1,7 @@
+"Kreditkarte";"Synthetic"
+"Zeitraum";"01.07.2026 - 31.07.2026"
+"Saldo";"0,00 EUR"
+""
+"Belegdatum";"Wertstellung";"Status";"Beschreibung";"Umsatztyp";"Betrag (€)";"Fremdwährungsbetrag"
+"01.07.26";"01.07.26";"Gebucht";"Synthetic deposit";"Einzahlung";"100,00";""
+"02.07.26";"02.07.26";"Gebucht";"Example Software";"Onlinezahlung";"-20,00";"-22,00 USD"

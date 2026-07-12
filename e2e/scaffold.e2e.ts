@@ -28,9 +28,6 @@ test('renders the account management shell', async ({ page }) => {
 	).toBeVisible();
 	await expect(page.getByRole('heading', { name: /^accounts$|^konten$/i })).toBeVisible();
 	await expect(page.getByRole('button', { name: /create account|konto erstellen/i })).toBeVisible();
-	await expect(
-		page.getByRole('button', { name: /create profile|profil erstellen/i })
-	).toBeVisible();
 });
 
 test('renders the transaction review shell', async ({ page }) => {

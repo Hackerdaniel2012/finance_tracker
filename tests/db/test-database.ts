@@ -34,7 +34,10 @@ export async function applyMigrations(db: Database): Promise<void> {
 		'0003_add_transaction_subaccount.sql',
 		'0004_recurring_detector_v2.sql',
 		'0005_seed_category_rules.sql',
-		'0006_add_recurring_labels.sql'
+		'0006_add_recurring_labels.sql',
+		'0007_add_dkb_creditcard_scheme.sql',
+		'0008_rename_dkb_girocard_remove_profile_label.sql',
+		'0009_remove_import_profiles.sql'
 	];
 	for (const file of migrationFiles) {
 		applySql(db, await readFile(resolve('migrations', file), 'utf8'));
