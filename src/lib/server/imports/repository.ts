@@ -1,6 +1,8 @@
 import type { BankId } from '$lib/banks';
 import { NotFoundError } from '../accounts/errors';
 import type { DbClient, DbRow } from '../db-client';
+import { rematchPlans } from '../plans/rematching';
+import { rebuildRecurringSuggestions } from '../recurring/repository';
 import type { ImportBatch } from './types';
 
 export async function listImportBatches(db: DbClient): Promise<ImportBatch[]> {
@@ -43,7 +45,23 @@ export async function deleteImportBatch(db: DbClient, id: string): Promise<void>
 		throw new NotFoundError('Import batch not found');
 	}
 
-	await db.prepare('DELETE FROM import_batches WHERE id = ?').bind(batchId).run();
+	const { results: affectedPlans } = await db
+		.prepare(
+			`SELECT DISTINCT pt.plan_id
+			FROM plan_transactions pt
+			INNER JOIN transactions t ON t.id = pt.transaction_id
+			WHERE t.import_batch_id = ? AND pt.match_kind = 'automatic'`
+		)
+		.bind(batchId)
+		.all<AffectedPlanRow>();
+	if (!db.batch)
+		throw new Error('Database batch support is required for reversible import deletion');
+	await rematchPlans(
+		db,
+		affectedPlans.map((row) => row.plan_id),
+		[db.prepare('DELETE FROM import_batches WHERE id = ?').bind(batchId)]
+	);
+	await rebuildRecurringSuggestions(db);
 }
 
 function mapImportBatch(row: ImportBatchRow): ImportBatch {
@@ -80,4 +98,8 @@ interface ImportBatchRow extends DbRow {
 
 interface IdRow extends DbRow {
 	id: string;
+}
+
+interface AffectedPlanRow extends DbRow {
+	plan_id: string;
 }

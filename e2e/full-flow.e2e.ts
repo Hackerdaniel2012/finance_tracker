@@ -8,12 +8,19 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	const accountName = `E2E DKB ${suffix}`;
 	const categoryName = 'Groceries';
 	const reviewNote = `reviewed-${suffix}`;
+	const navigate = async (path: string) => {
+		await page.goto(path);
+		await page.waitForLoadState('networkidle');
+	};
 
-	await page.goto('/accounts');
+	await navigate('/accounts');
 	await expect(page.getByText(/^Ready$|^Bereit$/i)).toBeVisible();
 
 	await page.getByLabel(/account name|kontoname/i).fill(accountName);
-	await page.getByLabel(/institution/i).selectOption('DKB');
+	const institutionPicker = page.getByRole('button', { name: /institution/i });
+	await institutionPicker.click();
+	await expect(institutionPicker).toHaveAttribute('aria-expanded', 'true');
+	await page.getByRole('option', { name: 'DKB', exact: true }).click();
 	const accountResponse = page.waitForResponse(
 		(response) => response.url().includes('/api/accounts') && response.request().method() === 'POST'
 	);
@@ -24,7 +31,7 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	expect(createdAccount.account.id).toBeTruthy();
 	await expect(page.getByRole('heading', { name: accountName })).toBeVisible();
 
-	await page.goto('/imports');
+	await navigate('/imports');
 	await expect(page.getByText(/^Imports ready$|^Importe bereit$/i)).toBeVisible();
 	const importForm = page
 		.getByRole('button', { name: /preview import|import pruefen/i })
@@ -43,27 +50,31 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	await expect(page.getByText(/Example Market/i).first()).toBeVisible();
 
 	await page.getByRole('button', { name: /confirm import|import bestaetigen/i }).click();
-	await expect(page.getByRole('heading', { name: `${accountName} / dkb_girocard` })).toBeVisible({
+	await expect(page.getByRole('heading', { name: `${accountName} / DKB Giro Card` })).toBeVisible({
 		timeout: 60_000
 	});
 	await expect(
 		page.getByRole('button', { name: /delete import|import loeschen/i }).first()
 	).toBeVisible();
 
-	await page.goto('/transactions');
-	await page.getByLabel(/search transactions|transaktionen suchen/i).fill('REWE');
+	await navigate('/transactions');
+	await page.getByLabel(/search transactions|transaktionen suchen/i).fill('Example Market');
 	await page.getByRole('button', { name: /apply filters|filter anwenden/i }).click();
 	await expect(page.getByText(/Example Market/i).first()).toBeVisible();
 
-	await page.goto('/review');
+	await navigate('/review');
 	await expect(page.getByText(/^Review queue ready$|^Pruefung bereit$/i)).toBeVisible();
 	const reviewQueue = page
 		.getByRole('heading', { name: /unknown review queue|unbekannte transaktionen/i })
 		.locator('xpath=ancestor::section[1]');
-	await reviewQueue.getByLabel(/search transactions|transaktionen suchen/i).fill('REWE');
+	await reviewQueue.getByLabel(/search transactions|transaktionen suchen/i).fill('Example Market');
 	await reviewQueue.getByRole('button', { name: /apply filters|filter anwenden/i }).click();
-	await expect(reviewQueue).toContainText(/REWE/i);
-	await reviewQueue.locator('button').filter({ hasText: /REWE/i }).first().click();
+	await expect(reviewQueue).toContainText(/Example Market/i);
+	await reviewQueue
+		.locator('button')
+		.filter({ hasText: /Example Market/i })
+		.first()
+		.click();
 
 	const classificationForm = page
 		.getByRole('button', { name: /save classification|klassifizierung speichern/i })
@@ -78,13 +89,13 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 		page.getByText(/select an unknown transaction|unbekannte transaktion auswaehlen/i)
 	).toBeVisible();
 
-	await page.goto('/transactions');
+	await navigate('/transactions');
 	await page.getByLabel(/category|kategorie/i).selectOption({ label: categoryName });
 	await page.getByRole('button', { name: /apply filters|filter anwenden/i }).click();
 	await expect(page.getByRole('table')).toContainText(categoryName);
 	await expect(page.getByRole('table')).toContainText(/manual|manuell/i);
 
-	await page.goto('/');
+	await navigate('/');
 	await expect(page.getByRole('heading', { name: /net worth|nettovermoegen/i })).toBeVisible();
 	const scopedSummaryResponse = page.waitForResponse(
 		(response) => response.url().includes('/api/summary?accountId=') && response.ok()
@@ -95,124 +106,55 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	const scopedMonthCashflowResponse = page.waitForResponse(
 		(response) => response.url().includes('/api/month-cashflow?accountId=') && response.ok()
 	);
-	const scopedBalanceBeforeSalaryResponse = page.waitForResponse(
-		(response) => response.url().includes('/api/balance-before-salary?accountId=') && response.ok()
+	const scopedBalanceBeforeIncomeResponse = page.waitForResponse(
+		(response) => response.url().includes('/api/balance-before-income?accountId=') && response.ok()
 	);
-	await page.getByLabel(/dashboard account|dashboard-konto/i).selectOption({ label: accountName });
+	await page.getByRole('button', { name: /dashboard account|dashboard-konto/i }).click();
+	await page.getByRole('option', { name: accountName, exact: true }).click();
 	await scopedSummaryResponse;
 	await scopedNetWorthResponse;
 	await scopedMonthCashflowResponse;
-	await scopedBalanceBeforeSalaryResponse;
-	await expect(page.getByRole('heading', { name: accountName })).toBeVisible();
+	await scopedBalanceBeforeIncomeResponse;
 	await expect(
 		page
 			.getByRole('heading', { name: /recent transactions|letzte transaktionen/i })
 			.locator('xpath=ancestor::article[1]')
-	).toContainText(/REWE|AMAZON|JET/i);
+	).toContainText(/Example Market|Example Employer|Example Cafe/i);
 
-	await page.goto('/planning');
-	const contractName = `E2E contract ${suffix}`;
-	const updatedContractName = `${contractName} updated`;
-	const contractForm = page
-		.getByRole('button', { name: /create contract|vertrag erstellen/i })
-		.locator('xpath=ancestor::form');
-	await contractForm.getByLabel(/contract name|vertragsname/i).fill(contractName);
-	await contractForm.getByLabel(/payee|empfaenger/i).fill('E2E employer');
-	await contractForm.getByLabel(/amount|betrag/i).fill('1250');
-	await contractForm.getByLabel(/account|konto/i).selectOption({ label: accountName });
-	const createContractResponse = page.waitForResponse(
-		(response) =>
-			response.url().endsWith('/api/contracts') && response.request().method() === 'POST'
+	await navigate('/planning');
+	const planName = `E2E plan ${suffix}`;
+	await page.getByLabel(/counterparty|zahlungspartner/i).fill('Example Market');
+	await page.getByLabel(/^label$/i).fill(planName);
+	await page.getByLabel(/amount|betrag/i).fill('42.50');
+	await page.getByRole('button', { name: /^account$|^konto$/i }).click();
+	await page.getByRole('option', { name: accountName, exact: true }).click();
+	await page.getByRole('button', { name: /next date|naechstes datum/i }).click();
+	await page.getByRole('button', { name: /07\/01\/2026|01\.07\.2026/ }).click();
+	const createPlanResponse = page.waitForResponse(
+		(response) => response.url().endsWith('/api/plans') && response.request().method() === 'POST'
 	);
-	await contractForm.getByRole('button', { name: /create contract|vertrag erstellen/i }).click();
-	expect((await createContractResponse).ok()).toBe(true);
-	await expect(page.getByText(contractName, { exact: true })).toBeVisible();
+	await page.getByRole('button', { name: /create plan|plan erstellen/i }).click();
+	expect((await createPlanResponse).ok()).toBe(true);
+	const planRow = page.getByText(planName, { exact: true }).locator('xpath=ancestor::article[1]');
+	await expect(planRow).toContainText(/done|erledigt/i);
 
+	await navigate('/imports');
+	const deleteImportResponse = page.waitForResponse(
+		(response) =>
+			response.url().includes('/api/imports/') && response.request().method() === 'DELETE'
+	);
 	await page
-		.getByRole('button', { name: /edit contract|vertrag bearbeiten/i })
+		.getByRole('button', { name: /delete import|import loeschen/i })
 		.first()
 		.click();
-	const editContractForm = page
-		.getByRole('button', { name: /save contract|vertrag speichern/i })
-		.locator('xpath=ancestor::form');
-	await editContractForm.getByLabel(/contract name|vertragsname/i).fill(updatedContractName);
-	const updateContractResponse = page.waitForResponse(
-		(response) =>
-			response.url().endsWith('/api/contracts') && response.request().method() === 'PATCH'
-	);
-	await editContractForm.getByRole('button', { name: /save contract|vertrag speichern/i }).click();
-	expect((await updateContractResponse).ok()).toBe(true);
-	await expect(page.getByText(updatedContractName, { exact: true })).toBeVisible();
+	expect((await deleteImportResponse).ok()).toBe(true);
+	await navigate('/planning');
+	const restoredPlanRow = page
+		.getByText(planName, { exact: true })
+		.locator('xpath=ancestor::article[1]');
+	await expect(restoredPlanRow).toContainText(/active|aktiv/i);
 
-	const paymentPayee = `E2E payment ${suffix}`;
-	const updatedPaymentPayee = `${paymentPayee} updated`;
-	const paymentForm = page
-		.getByRole('button', { name: /create planned payment|geplante zahlung erstellen/i })
-		.locator('xpath=ancestor::form');
-	await paymentForm.getByLabel(/payee|empfaenger/i).fill(paymentPayee);
-	await paymentForm.getByLabel(/amount|betrag/i).fill('45');
-	const createPaymentResponse = page.waitForResponse(
-		(response) =>
-			response.url().endsWith('/api/planned-payments') && response.request().method() === 'POST'
-	);
-	await paymentForm
-		.getByRole('button', { name: /create planned payment|geplante zahlung erstellen/i })
-		.click();
-	expect((await createPaymentResponse).ok()).toBe(true);
-	await expect(page.getByText(paymentPayee, { exact: true })).toBeVisible();
-	await page
-		.getByRole('button', { name: /edit planned payment|geplante zahlung bearbeiten/i })
-		.first()
-		.click();
-	const editPaymentForm = page
-		.getByRole('button', { name: /save planned payment|geplante zahlung speichern/i })
-		.locator('xpath=ancestor::form');
-	await editPaymentForm.getByLabel(/payee|empfaenger/i).fill(updatedPaymentPayee);
-	const updatePaymentResponse = page.waitForResponse(
-		(response) =>
-			response.url().endsWith('/api/planned-payments') && response.request().method() === 'PATCH'
-	);
-	await editPaymentForm
-		.getByRole('button', { name: /save planned payment|geplante zahlung speichern/i })
-		.click();
-	expect((await updatePaymentResponse).ok()).toBe(true);
-	await expect(page.getByText(updatedPaymentPayee, { exact: true })).toBeVisible();
-
-	const incomePayer = `E2E income ${suffix}`;
-	const updatedIncomePayer = `${incomePayer} updated`;
-	const incomeForm = page
-		.getByRole('button', { name: /create planned income|geplante einnahme erstellen/i })
-		.locator('xpath=ancestor::form');
-	await incomeForm.getByLabel(/payer|zahler/i).fill(incomePayer);
-	await incomeForm.getByLabel(/amount|betrag/i).fill('80');
-	const createIncomeResponse = page.waitForResponse(
-		(response) =>
-			response.url().endsWith('/api/planned-income') && response.request().method() === 'POST'
-	);
-	await incomeForm
-		.getByRole('button', { name: /create planned income|geplante einnahme erstellen/i })
-		.click();
-	expect((await createIncomeResponse).ok()).toBe(true);
-	await expect(page.getByText(incomePayer, { exact: true })).toBeVisible();
-	await page
-		.getByRole('button', { name: /edit planned income|geplante einnahme bearbeiten/i })
-		.first()
-		.click();
-	const editIncomeForm = page
-		.getByRole('button', { name: /save planned income|geplante einnahme speichern/i })
-		.locator('xpath=ancestor::form');
-	await editIncomeForm.getByLabel(/payer|zahler/i).fill(updatedIncomePayer);
-	const updateIncomeResponse = page.waitForResponse(
-		(response) =>
-			response.url().endsWith('/api/planned-income') && response.request().method() === 'PATCH'
-	);
-	await editIncomeForm
-		.getByRole('button', { name: /save planned income|geplante einnahme speichern/i })
-		.click();
-	expect((await updateIncomeResponse).ok()).toBe(true);
-	await expect(page.getByText(updatedIncomePayer, { exact: true })).toBeVisible();
-
-	await page.goto('/accounts');
+	await navigate('/accounts');
 	page.on('dialog', (dialog) => void dialog.accept());
 	const accountRow = page
 		.getByRole('heading', { name: accountName })

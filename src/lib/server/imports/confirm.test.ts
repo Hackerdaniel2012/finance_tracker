@@ -61,13 +61,13 @@ describe('confirmImport', () => {
 		expect(
 			firstValue<string>(
 				sqlite,
-				"SELECT category_id FROM transactions WHERE dedupe_key = 'ref-shop'"
+				"SELECT category_id FROM transactions WHERE dedupe_key = 'dkb_ref:ref-shop|2026-07-08|2026-07-08|-1234'"
 			)
 		).toBe('cat-groceries');
 		expect(
 			firstValue<string>(
 				sqlite,
-				"SELECT classification_status FROM transactions WHERE dedupe_key = 'ref-cafe'"
+				"SELECT classification_status FROM transactions WHERE dedupe_key = 'dkb_ref:ref-cafe|2026-07-09|2026-07-09|-400'"
 			)
 		).toBe('unknown');
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transaction_review_flags')).toBe(1);
@@ -75,7 +75,10 @@ describe('confirmImport', () => {
 
 	it('deduplicates existing rows and stores parse errors without raw CSV rows', async () => {
 		const importAccount = await createDkbAccount();
-		await insertTransaction(importAccount.accountId, 'ref-duplicate');
+		await insertTransaction(
+			importAccount.accountId,
+			'dkb_ref:ref-duplicate|2026-07-08|2026-07-08|-1234'
+		);
 		const csv = dkbCsv([
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Duplicate";"Already imported";"Ausgang";"DE";"12,34";"";"";"ref-duplicate"',
 			'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-new"',
@@ -247,9 +250,9 @@ describe('confirmImport', () => {
 			priority: 10
 		});
 		const csv = dkbCsv([
-			'"14.04.26";"14.04.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"45,99";"";"";"ref-power-apr"',
+			'"14.04.26";"14.04.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"46,00";"";"";"ref-power-apr"',
 			'"15.05.26";"15.05.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"46,00";"";"";"ref-power-may"',
-			'"14.06.26";"14.06.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"46,25";"";"";"ref-power-jun"'
+			'"14.06.26";"14.06.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"46,00";"";"";"ref-power-jun"'
 		]);
 
 		await confirmImport(db, {

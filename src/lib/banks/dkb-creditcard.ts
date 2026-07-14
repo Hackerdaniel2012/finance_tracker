@@ -54,6 +54,7 @@ export const dkbCreditcardAdapter: BankAdapter = {
 
 		const rows: NormalizedTransaction[] = [];
 		const errors: ParseError[] = [...parsed.errors];
+		const dedupeOccurrences = new Map<string, number>();
 
 		for (const record of parsed.records) {
 			const bookingDate = parseGermanShortDate(record.values.Belegdatum ?? '');
@@ -90,6 +91,9 @@ export const dkbCreditcardAdapter: BankAdapter = {
 			const description = record.values.Beschreibung?.trim() || undefined;
 			const rawType = record.values.Umsatztyp?.trim() || undefined;
 			const foreignAmount = parseForeignAmount(record.values.Fremdwährungsbetrag);
+			const baseDedupeKey = stableFingerprint([bookingDate, amountCents, description, rawType]);
+			const occurrence = (dedupeOccurrences.get(baseDedupeKey) ?? 0) + 1;
+			dedupeOccurrences.set(baseDedupeKey, occurrence);
 
 			rows.push({
 				bookingDate,
@@ -101,7 +105,7 @@ export const dkbCreditcardAdapter: BankAdapter = {
 				payee: description,
 				description,
 				searchText: normalizeWhitespace(description, rawType),
-				dedupeKey: stableFingerprint([bookingDate, amountCents, description, rawType]),
+				dedupeKey: `${baseDedupeKey}:${occurrence}`,
 				source: {
 					bankId: 'dkb_creditcard',
 					rowNumber: record.rowNumber,

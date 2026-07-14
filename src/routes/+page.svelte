@@ -158,7 +158,7 @@
 				fetchJson<{ summary: SummaryReport }>(`/api/summary${reportQuery}`),
 				fetchJson<{ netWorth: NetWorthReport }>(`/api/net-worth${reportQuery}`),
 				fetchJson<{ monthCashflow: MonthCashflowReport }>(`/api/month-cashflow${reportQuery}`),
-				fetchJson<{ projection: BalanceProjection }>(`/api/balance-before-salary${reportQuery}`)
+				fetchJson<{ projection: BalanceProjection }>(`/api/balance-before-income${reportQuery}`)
 			]);
 			if (results[0].status === 'fulfilled') summary = results[0].value.summary;
 			if (results[1].status === 'fulfilled') netWorth = results[1].value.netWorth;
@@ -211,7 +211,7 @@
 <main class="mx-auto max-w-7xl px-4 py-6 lg:py-8">
 	<section class="space-y-5">
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-			<h1 class="text-3xl font-semibold tracking-normal text-zinc-950 sm:text-4xl">{m.nav_dashboard()}</h1>
+			<h1 class="text-3xl font-semibold tracking-normal text-zinc-950">{m.nav_dashboard()}</h1>
 			<p
 				class={`inline-flex items-center gap-1.5 text-sm font-medium ${
 					dashboardStatusTone === 'error'
@@ -223,15 +223,42 @@
 				aria-live="polite"
 			>
 				{#if dashboardStatusTone === 'ready'}
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class="size-4"
+						aria-hidden="true"
+					>
 						<circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" />
 					</svg>
 				{:else if dashboardStatusTone === 'error'}
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4" aria-hidden="true">
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class="size-4"
+						aria-hidden="true"
+					>
 						<circle cx="12" cy="12" r="9" /><path d="M12 8v4" /><path d="M12 16h.01" />
 					</svg>
 				{:else}
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="size-4 animate-spin" aria-hidden="true">
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						class="size-4 animate-spin"
+						aria-hidden="true"
+					>
 						<path d="M12 3a9 9 0 1 0 9 9" />
 					</svg>
 				{/if}
@@ -250,16 +277,19 @@
 	<section class="mt-4 grid gap-6">
 		<div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
 			<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
-				<label class="grid gap-2">
+				<div class="grid gap-2">
 					<span class="text-sm font-medium text-zinc-500">{m.dashboard_account_scope()}</span>
 					<Picker
 						ariaLabel={m.dashboard_account_scope()}
 						placeholder={m.all_accounts()}
-						options={[{ value: '', label: m.all_accounts() }, ...buildAccountScopeOptions(accounts)]}
+						options={[
+							{ value: '', label: m.all_accounts() },
+							...buildAccountScopeOptions(accounts)
+						]}
 						bind:value={dashboardAccountScope}
 						onchange={() => loadDashboard()}
 					/>
-				</label>
+				</div>
 			</article>
 			<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
 				<p class="text-sm font-medium text-zinc-500">{m.total_balance()}</p>
@@ -274,7 +304,7 @@
 				</p>
 			</article>
 			<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
-				<p class="text-sm font-medium text-zinc-500">{m.balance_before_salary()}</p>
+				<p class="text-sm font-medium text-zinc-500">{m.balance_before_next_income()}</p>
 				<p class="mt-2 text-2xl font-semibold text-zinc-950">
 					{projection ? centsToEuros(projection.projectedBalanceCents) : '—'}
 				</p>

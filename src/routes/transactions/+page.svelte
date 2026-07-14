@@ -410,7 +410,7 @@
 				</label>
 			</div>
 			<button
-				class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+				class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 				type="submit"
 				disabled={isLoading}
 			>
@@ -436,7 +436,7 @@
 				</div>
 				<div class="flex gap-2">
 					<button
-						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-40"
+						class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-40"
 						type="button"
 						disabled={!canGoBack || isLoading}
 						onclick={() => changePage(offset - pageSize)}
@@ -444,7 +444,7 @@
 						{m.previous_page()}
 					</button>
 					<button
-						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-40"
+						class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-40"
 						type="button"
 						disabled={!canGoForward || isLoading}
 						onclick={() => changePage(offset + pageSize)}
@@ -553,7 +553,7 @@
 						</label>
 					{/if}
 					<button
-						class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+							class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSaving}
 					>

@@ -58,7 +58,10 @@ describe('previewImport', () => {
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-1"',
 			'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-2"'
 		].join('\n');
-		await insertTransaction(importAccount.accountId, 'ref-1');
+		await insertTransaction(
+			importAccount.accountId,
+			'dkb_ref:ref-1|2026-07-08|2026-07-08|-1234'
+		);
 
 		const preview = await previewImport(db, {
 			accountId: importAccount.accountId,
@@ -67,6 +70,33 @@ describe('previewImport', () => {
 		});
 
 		expect(preview.summary.duplicateEstimate).toBe(1);
+		expect(preview.duplicateRows).toMatchObject([
+			{
+				reason: 'existing_transaction',
+				transaction: { bookingDate: '2026-07-08', amountCents: -1234, payee: 'Shop' },
+				existingTransaction: { bookingDate: '2026-07-08', amountCents: -1234, payee: null }
+			}
+		]);
+	});
+
+	it('lists repeated rows in the uploaded file as duplicates', async () => {
+		const importAccount = await createDkbAccount();
+		const csv = [
+			'"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"',
+			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-1"',
+			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-1"'
+		].join('\n');
+
+		const preview = await previewImport(db, {
+			accountId: importAccount.accountId,
+			adapterId: importAccount.bankId,
+			csv
+		});
+
+		expect(preview.summary.duplicateEstimate).toBe(1);
+		expect(preview.duplicateRows).toMatchObject([
+			{ reason: 'duplicate_in_file', transaction: { source: { rowNumber: 3 } } }
+		]);
 	});
 
 	it('rejects missing profiles and empty CSV content', async () => {

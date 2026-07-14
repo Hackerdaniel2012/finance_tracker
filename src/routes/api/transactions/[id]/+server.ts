@@ -6,8 +6,9 @@ import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async (event) => {
 	try {
+		const db = getRequestDatabase(event);
 		const transaction = await updateTransaction(
-			getRequestDatabase(event),
+			db,
 			parseUpdateTransactionInput(event.params.id, await readJson(event.request))
 		);
 

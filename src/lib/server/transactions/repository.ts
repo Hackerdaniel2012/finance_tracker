@@ -1,6 +1,7 @@
 import { NotFoundError, ValidationError } from '../accounts/errors';
 import { matchesCategoryRule } from '../categories/matcher';
-import type { DbClient, DbRow, DbValue } from '../db-client';
+import type { DbClient, DbRow, DbStatement, DbValue } from '../db-client';
+import { applyCategoryMutationsAndRematch, type CategoryMutation } from '../plans/rematching';
 import type {
 	Transaction,
 	TransactionClassificationStatus,
@@ -65,53 +66,67 @@ export async function updateTransaction(
 	if (input.categoryId !== undefined && input.categoryId !== null) {
 		await assertCategoryExists(db, input.categoryId);
 	}
-
-	await db
-		.prepare(
-			`UPDATE transactions
-			SET
-				category_id = ?,
-				note = ?,
-				classification_status = ?,
-				updated_at = CURRENT_TIMESTAMP
-			WHERE id = ?`
-		)
-		.bind(
-			input.categoryId === undefined ? existing.categoryId : input.categoryId,
-			input.note === undefined ? existing.note : input.note,
-			input.categoryId !== undefined ? 'manual' : existing.classificationStatus,
-			input.id
-		)
-		.run();
-
-	if (input.tagNames !== undefined) {
-		await replaceTransactionTags(db, input.id, input.tagNames);
+	const categoryMutations: CategoryMutation[] = [];
+	if (input.categoryId !== undefined && input.categoryId !== existing.categoryId) {
+		categoryMutations.push({ transactionId: input.id, categoryId: input.categoryId });
 	}
 
-	if (input.categoryId) {
-		await resolveReviewFlag(db, input.id);
-	}
-
-	let bulkAppliedCount = 0;
+	let preparedRule: PreparedRuleApplication | null = null;
 	if (input.createRule === true) {
 		const categoryId = input.categoryId ?? existing.categoryId;
 		if (!categoryId) {
 			throw new ValidationError('categoryId is required to create a category rule');
 		}
-		bulkAppliedCount = await createRuleFromTransaction(db, {
+		preparedRule = await prepareRuleFromTransaction(db, {
 			transactionId: input.id,
 			categoryId,
 			ruleName: input.ruleName,
-			applyToExisting: input.applyRuleToExisting === true
+			applyToExisting: input.applyRuleToExisting === true,
+			payee: existing.payee,
+			searchText: existing.searchText
 		});
 	}
+
+	const statements: DbStatement[] = [
+		db
+			.prepare(
+				`UPDATE transactions
+				SET
+					category_id = ?,
+				note = ?,
+				classification_status = ?,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?`
+			)
+			.bind(
+				input.categoryId === undefined ? existing.categoryId : input.categoryId,
+				input.note === undefined ? existing.note : input.note,
+				input.categoryId !== undefined ? 'manual' : existing.classificationStatus,
+				input.id
+			)
+	];
+
+	if (input.tagNames !== undefined) {
+		statements.push(...prepareTransactionTagStatements(db, input.id, input.tagNames));
+	}
+
+	if (input.categoryId) {
+		statements.push(resolveReviewFlagStatement(db, input.id));
+	}
+
+	if (preparedRule) {
+		statements.push(...preparedRule.statements);
+		categoryMutations.push(...preparedRule.categoryMutations);
+	}
+
+	await applyCategoryMutationsAndRematch(db, categoryMutations, statements);
 
 	const updated = await getTransaction(db, input.id);
 	if (!updated) {
 		throw new NotFoundError('Transaction not found');
 	}
 
-	return { ...updated, classifiedCount: 1, bulkAppliedCount };
+	return { ...updated, classifiedCount: 1, bulkAppliedCount: preparedRule?.count ?? 0 };
 }
 
 async function getTransaction(db: DbClient, id: string): Promise<Transaction | null> {
@@ -177,7 +192,6 @@ function buildTransactionWhere(filters: TransactionListFilters): {
 		clauses.push('t.subaccount = ?');
 		values.push(filters.subaccount);
 	}
-
 
 	if (filters.categoryId) {
 		clauses.push('t.category_id = ?');
@@ -301,93 +315,103 @@ async function listTagsForTransactions(
 	return tagsByTransactionId;
 }
 
-async function replaceTransactionTags(
+function prepareTransactionTagStatements(
 	db: DbClient,
 	transactionId: string,
 	tagNames: string[]
-): Promise<void> {
-	await db
-		.prepare('DELETE FROM transaction_tags WHERE transaction_id = ?')
-		.bind(transactionId)
-		.run();
+): DbStatement[] {
+	const statements: DbStatement[] = [
+		db.prepare('DELETE FROM transaction_tags WHERE transaction_id = ?').bind(transactionId)
+	];
 
 	for (const tagName of tagNames) {
-		const tag = await getOrCreateTag(db, tagName);
-		await db
-			.prepare(
-				`INSERT INTO transaction_tags (transaction_id, tag_id)
-				VALUES (?, ?)`
-			)
-			.bind(transactionId, tag.id)
-			.run();
+		statements.push(
+			db
+				.prepare('INSERT OR IGNORE INTO tags (id, name) VALUES (?, ?)')
+				.bind(crypto.randomUUID(), tagName),
+			db
+				.prepare(
+					`INSERT OR IGNORE INTO transaction_tags (transaction_id, tag_id)
+					SELECT ?, id FROM tags WHERE name = ?`
+				)
+				.bind(transactionId, tagName)
+		);
 	}
+	return statements;
 }
 
-async function getOrCreateTag(db: DbClient, name: string): Promise<TransactionTag> {
-	const existing = await db
-		.prepare('SELECT id, name, color FROM tags WHERE name = ?')
-		.bind(name)
-		.first<TagOnlyRow>();
-	if (existing) {
-		return { id: existing.id, name: existing.name, color: existing.color };
-	}
-
-	const id = crypto.randomUUID();
-	await db.prepare('INSERT INTO tags (id, name) VALUES (?, ?)').bind(id, name).run();
-
-	return { id, name, color: null };
-}
-
-async function resolveReviewFlag(db: DbClient, transactionId: string): Promise<void> {
-	await db
+function resolveReviewFlagStatement(db: DbClient, transactionId: string): DbStatement {
+	return db
 		.prepare(
 			`UPDATE transaction_review_flags
 			SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
 			WHERE transaction_id = ?
 				AND status = 'open'`
 		)
-		.bind(transactionId)
-		.run();
+		.bind(transactionId);
 }
 
-async function createRuleFromTransaction(
+async function prepareRuleFromTransaction(
 	db: DbClient,
-	input: { transactionId: string; categoryId: string; ruleName?: string; applyToExisting: boolean }
-): Promise<number> {
-	const row = await db
-		.prepare('SELECT payee, search_text FROM transactions WHERE id = ?')
-		.bind(input.transactionId)
-		.first<RuleSourceRow>();
-	const pattern = row?.payee?.trim() || row?.search_text?.trim();
+	input: {
+		transactionId: string;
+		categoryId: string;
+		ruleName?: string;
+		applyToExisting: boolean;
+		payee: string | null;
+		searchText: string;
+	}
+): Promise<PreparedRuleApplication> {
+	const pattern = input.payee?.trim() || input.searchText.trim();
 	if (!pattern) {
 		throw new ValidationError('Transaction needs payee or search text to create a category rule');
 	}
 
-	await db
-		.prepare(
-			`INSERT INTO category_rules (id, category_id, name, field, operator, pattern, priority, is_global)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-		)
-		.bind(
-			crypto.randomUUID(),
-			input.categoryId,
-			input.ruleName ?? `Match ${pattern}`,
-			row?.payee?.trim() ? 'payee' : 'search_text',
-			'contains',
-			pattern,
-			100,
-			1
-		)
-		.run();
+	const field = input.payee?.trim() ? 'payee' : 'search_text';
+	const statements: DbStatement[] = [
+		db
+			.prepare(
+				`INSERT INTO category_rules (id, category_id, name, field, operator, pattern, priority, is_global)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			)
+			.bind(
+				crypto.randomUUID(),
+				input.categoryId,
+				input.ruleName ?? `Match ${pattern}`,
+				field,
+				'contains',
+				pattern,
+				100,
+				1
+			)
+	];
 
-	if (!input.applyToExisting) return 0;
-	return applyRuleToUnknownTransactions(db, {
-		field: row?.payee?.trim() ? 'payee' : 'search_text',
-		operator: 'contains',
-		pattern,
-		categoryId: input.categoryId,
-		excludeId: input.transactionId
-	});
+	if (!input.applyToExisting) return { count: 0, categoryMutations: [], statements };
+	const rows = (await listUnknownRuleRows(db)).filter(
+		(row) =>
+			row.id !== input.transactionId &&
+			matchesCategoryRule(mapRuleSource(row), {
+				field,
+				operator: 'contains',
+				pattern
+			})
+	);
+	const categoryMutations = rows
+		.filter((row) => row.category_id !== input.categoryId)
+		.map((row) => ({ transactionId: row.id, categoryId: input.categoryId }));
+	statements.push(
+		...prepareBulkCategoryStatements(
+			db,
+			rows.map((row) => row.id),
+			input.categoryId,
+			'auto'
+		),
+		...prepareReviewResolutionStatements(
+			db,
+			rows.map((row) => row.id)
+		)
+	);
+	return { count: rows.length, categoryMutations, statements };
 }
 
 export async function previewCategoryRule(
@@ -445,7 +469,10 @@ export async function reclassifyTransactions(db: DbClient): Promise<{
 		const newCategoryId = match?.categoryId ?? null;
 		const isMatched = newCategoryId !== null;
 
-		if (row.category_id === newCategoryId && (isMatched || row.classification_status === 'unknown')) {
+		if (
+			row.category_id === newCategoryId &&
+			(isMatched || row.classification_status === 'unknown')
+		) {
 			continue;
 		}
 
@@ -456,46 +483,51 @@ export async function reclassifyTransactions(db: DbClient): Promise<{
 		}
 	}
 
-	for (let offset = 0; offset < toCategorize.length; offset += 200) {
-		const statements = toCategorize.slice(offset, offset + 200).flatMap(({ row, newCategoryId }) => [
-			db
-				.prepare(
-					`UPDATE transactions
-					SET category_id = ?, classification_status = 'auto', updated_at = CURRENT_TIMESTAMP
-					WHERE id = ?`
-				)
-				.bind(newCategoryId, row.id),
-			db
-				.prepare(
-					`UPDATE transaction_review_flags
-					SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
-					WHERE transaction_id = ? AND status = 'open'`
-				)
-				.bind(row.id)
-		]);
-		if (db.batch) await db.batch(statements);
-		else for (const statement of statements) await statement.run();
+	const statements: DbStatement[] = [];
+	const categorizedByCategory = new Map<string, string[]>();
+	for (const { row, newCategoryId } of toCategorize) {
+		const ids = categorizedByCategory.get(newCategoryId) ?? [];
+		ids.push(row.id);
+		categorizedByCategory.set(newCategoryId, ids);
 	}
-
-	for (let offset = 0; offset < toUncategorize.length; offset += 200) {
-		const statements = toUncategorize.slice(offset, offset + 200).flatMap((row) => [
-			db
-				.prepare(
-					`UPDATE transactions
-					SET category_id = NULL, classification_status = 'unknown', updated_at = CURRENT_TIMESTAMP
-					WHERE id = ?`
-				)
-				.bind(row.id),
+	for (const [categoryId, ids] of categorizedByCategory) {
+		statements.push(
+			...prepareBulkCategoryStatements(db, ids, categoryId, 'auto'),
+			...prepareReviewResolutionStatements(db, ids)
+		);
+	}
+	statements.push(
+		...prepareBulkCategoryStatements(
+			db,
+			toUncategorize.map((row) => row.id),
+			null,
+			'unknown'
+		)
+	);
+	for (const row of toUncategorize) {
+		statements.push(
 			db
 				.prepare(
 					`INSERT OR IGNORE INTO transaction_review_flags (id, transaction_id, reason)
 					VALUES (?, ?, 'unknown_category')`
 				)
 				.bind(crypto.randomUUID(), row.id)
-		]);
-		if (db.batch) await db.batch(statements);
-		else for (const statement of statements) await statement.run();
+		);
 	}
+
+	await applyCategoryMutationsAndRematch(
+		db,
+		[
+			...toCategorize.map(({ row, newCategoryId }) => ({
+				transactionId: row.id,
+				categoryId: newCategoryId
+			})),
+			...toUncategorize
+				.filter((row) => row.category_id !== null)
+				.map((row) => ({ transactionId: row.id, categoryId: null }))
+		],
+		statements
+	);
 
 	return {
 		updatedCount: toCategorize.length + toUncategorize.length,
@@ -504,40 +536,49 @@ export async function reclassifyTransactions(db: DbClient): Promise<{
 	};
 }
 
-async function applyRuleToUnknownTransactions(
+function prepareBulkCategoryStatements(
 	db: DbClient,
-	rule: RuleMatchDraft & { categoryId: string; excludeId: string }
-): Promise<number> {
-	const rows = (await listUnknownRuleRows(db)).filter(
-		(row) => row.id !== rule.excludeId && matchesCategoryRule(mapRuleSource(row), rule)
-	);
-	for (let offset = 0; offset < rows.length; offset += 200) {
-		const statements = rows.slice(offset, offset + 200).flatMap((row) => [
+	transactionIds: string[],
+	categoryId: string | null,
+	status: 'auto' | 'unknown'
+): DbStatement[] {
+	const statements: DbStatement[] = [];
+	for (let offset = 0; offset < transactionIds.length; offset += 100) {
+		const chunk = transactionIds.slice(offset, offset + 100);
+		statements.push(
 			db
 				.prepare(
 					`UPDATE transactions
-				SET category_id = ?, classification_status = 'auto', updated_at = CURRENT_TIMESTAMP
-				WHERE id = ? AND classification_status = 'unknown'`
+					SET category_id = ?, classification_status = ?, updated_at = CURRENT_TIMESTAMP
+					WHERE id IN (${chunk.map(() => '?').join(', ')})`
 				)
-				.bind(rule.categoryId, row.id),
+				.bind(categoryId, status, ...chunk)
+		);
+	}
+	return statements;
+}
+
+function prepareReviewResolutionStatements(db: DbClient, transactionIds: string[]): DbStatement[] {
+	const statements: DbStatement[] = [];
+	for (let offset = 0; offset < transactionIds.length; offset += 100) {
+		const chunk = transactionIds.slice(offset, offset + 100);
+		statements.push(
 			db
 				.prepare(
 					`UPDATE transaction_review_flags
-				SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
-				WHERE transaction_id = ? AND status = 'open'`
+					SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
+					WHERE transaction_id IN (${chunk.map(() => '?').join(', ')}) AND status = 'open'`
 				)
-				.bind(row.id)
-		]);
-		if (db.batch) await db.batch(statements);
-		else for (const statement of statements) await statement.run();
+				.bind(...chunk)
+		);
 	}
-	return rows.length;
+	return statements;
 }
 
 async function listUnknownRuleRows(db: DbClient): Promise<RuleMatchRow[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT id, booking_date, amount_cents, payee, description, note, search_text
+			`SELECT id, booking_date, amount_cents, payee, description, note, search_text, category_id
 		FROM transactions
 		WHERE classification_status = 'unknown'
 		ORDER BY booking_date DESC, id DESC`
@@ -649,17 +690,6 @@ interface TagRow extends DbRow {
 	color: string | null;
 }
 
-interface TagOnlyRow extends DbRow {
-	id: string;
-	name: string;
-	color: string | null;
-}
-
-interface RuleSourceRow extends DbRow {
-	payee: string | null;
-	search_text: string | null;
-}
-
 interface CategoryRuleRow extends DbRow {
 	id: string;
 	category_id: string;
@@ -693,6 +723,13 @@ interface RuleMatchRow extends DbRow {
 	description: string | null;
 	note: string | null;
 	search_text: string;
+	category_id: string | null;
+}
+
+interface PreparedRuleApplication {
+	count: number;
+	categoryMutations: CategoryMutation[];
+	statements: DbStatement[];
 }
 
 interface RulePreviewRow {

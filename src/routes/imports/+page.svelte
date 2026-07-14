@@ -23,6 +23,23 @@
 		payee: string | null;
 		description: string | null;
 		dedupeKey: string;
+		source: {
+			rowNumber: number;
+		};
+	}
+
+	interface ExistingDuplicateTransaction {
+		bookingDate: string;
+		amountCents: number;
+		payee: string | null;
+		description: string | null;
+		dedupeKey: string;
+	}
+
+	interface DuplicateImportRow {
+		transaction: NormalizedTransaction;
+		reason: 'existing_transaction' | 'duplicate_in_file';
+		existingTransaction?: ExistingDuplicateTransaction;
 	}
 
 	interface ImportPreview {
@@ -38,6 +55,7 @@
 			endDate: string | null;
 		};
 		sampleRows: NormalizedTransaction[];
+		duplicateRows: DuplicateImportRow[];
 		errors: Array<{ rowNumber: number; code: string; message: string }>;
 	}
 
@@ -90,7 +108,8 @@
 		preview !== null &&
 			selectedFile !== null &&
 			!isConfirming &&
-			preview.accountId === selectedAccountId && preview.adapterId === selectedAdapterId
+			preview.accountId === selectedAccountId &&
+			preview.adapterId === selectedAdapterId
 	);
 
 	onMount(() => {
@@ -230,6 +249,12 @@
 	function schemeLabel(adapterId: BankId): string {
 		return schemes.find((scheme) => scheme.id === adapterId)?.label ?? adapterId;
 	}
+
+	function duplicateReasonLabel(row: DuplicateImportRow): string {
+		return row.reason === 'existing_transaction'
+			? m.duplicate_existing_transaction()
+			: m.duplicate_in_file();
+	}
 </script>
 
 <svelte:head>
@@ -247,7 +272,7 @@
 	<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
 		<h2 class="text-lg font-semibold text-zinc-950">{m.import_upload_title()}</h2>
 		<form class="mt-5 grid gap-4" onsubmit={previewImport}>
-			<label class="grid gap-1 text-sm font-medium text-zinc-700">
+			<div class="grid gap-1 text-sm font-medium text-zinc-700">
 				<span>{m.account()}</span>
 				<Picker
 					ariaLabel={m.account()}
@@ -255,8 +280,8 @@
 					options={accounts.map((account) => ({ value: account.id, label: account.name }))}
 					bind:value={selectedAccountId}
 				/>
-			</label>
-			<label class="grid gap-1 text-sm font-medium text-zinc-700">
+			</div>
+			<div class="grid gap-1 text-sm font-medium text-zinc-700">
 				<span>{m.csv_scheme()}</span>
 				<Picker
 					ariaLabel={m.csv_scheme()}
@@ -264,7 +289,7 @@
 					options={schemes.map((scheme) => ({ value: scheme.id, label: scheme.label }))}
 					bind:value={selectedAdapterId}
 				/>
-			</label>
+			</div>
 			<label class="grid gap-1 text-sm font-medium text-zinc-700">
 				<span>{m.csv_file()}</span>
 				<input
@@ -276,7 +301,7 @@
 				/>
 			</label>
 			<button
-				class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+				class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 				type="submit"
 				disabled={!canPreview}
 			>
@@ -301,7 +326,7 @@
 				<h2 class="text-lg font-semibold text-zinc-950">{m.import_preview_title()}</h2>
 				{#if preview}
 					<button
-						class="rounded border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-950 disabled:opacity-50"
+						class="h-11 rounded border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-950 disabled:opacity-50"
 						type="button"
 						disabled={!canConfirm}
 						onclick={confirmImport}
@@ -356,6 +381,60 @@
 					</table>
 				</div>
 
+				{#if preview.duplicateRows.length > 0}
+					<div class="mt-6 rounded border border-amber-200 bg-amber-50 p-4">
+						<h3 class="text-sm font-semibold text-amber-950">{m.duplicate_rows()}</h3>
+						<p class="mt-1 text-sm text-amber-900">{m.duplicate_rows_description()}</p>
+						<div class="mt-4 overflow-x-auto">
+							<table class="min-w-full divide-y divide-amber-200 text-left text-sm">
+								<thead class="text-xs uppercase text-amber-800">
+									<tr>
+										<th class="px-3 py-2">{m.row()}</th>
+										<th class="px-3 py-2">{m.reason()}</th>
+										<th class="px-3 py-2">{m.date()}</th>
+										<th class="px-3 py-2">{m.payee()}</th>
+										<th class="px-3 py-2">{m.description()}</th>
+										<th class="px-3 py-2 text-right">{m.amount()}</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-amber-100 text-amber-950">
+									{#each preview.duplicateRows as duplicate (`${duplicate.transaction.source.rowNumber}-${duplicate.transaction.dedupeKey}`)}
+										<tr>
+											<td class="px-3 py-2">{duplicate.transaction.source.rowNumber}</td>
+											<td class="px-3 py-2">{duplicateReasonLabel(duplicate)}</td>
+											<td class="px-3 py-2">{formatDate(duplicate.transaction.bookingDate)}</td>
+											<td class="px-3 py-2">{duplicate.transaction.payee || m.not_available()}</td>
+											<td class="px-3 py-2"
+												>{duplicate.transaction.description || m.not_available()}</td
+											>
+											<td class="px-3 py-2 text-right font-medium"
+												>{centsToEuros(duplicate.transaction.amountCents)}</td
+											>
+										</tr>
+										{#if duplicate.existingTransaction}
+											<tr class="bg-amber-100/60">
+												<td class="px-3 py-2" colspan="2">{m.existing_transaction()}</td>
+												<td class="px-3 py-2"
+													>{formatDate(duplicate.existingTransaction.bookingDate)}</td
+												>
+												<td class="px-3 py-2"
+													>{duplicate.existingTransaction.payee || m.not_available()}</td
+												>
+												<td class="px-3 py-2"
+													>{duplicate.existingTransaction.description || m.not_available()}</td
+												>
+												<td class="px-3 py-2 text-right font-medium"
+													>{centsToEuros(duplicate.existingTransaction.amountCents)}</td
+												>
+											</tr>
+										{/if}
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				{/if}
+
 				{#if preview.errors.length > 0}
 					<div class="mt-6 rounded border border-amber-200 bg-amber-50 p-4">
 						<h3 class="text-sm font-semibold text-amber-950">{m.parse_errors()}</h3>
@@ -407,7 +486,7 @@
 									{batch.duplicateCount}
 								</p>
 								<button
-									class="rounded border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 disabled:opacity-50"
+									class="h-11 rounded border border-red-200 px-3 text-sm font-medium text-red-700 disabled:opacity-50"
 									type="button"
 									disabled={deletingImportId === batch.id}
 									onclick={() => deleteImport(batch)}

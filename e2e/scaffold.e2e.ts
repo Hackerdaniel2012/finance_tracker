@@ -3,13 +3,13 @@ import { expect, test } from '@playwright/test';
 test('renders the scaffold dashboard shell', async ({ page }) => {
 	await page.goto('/');
 
-	await expect(page.getByRole('heading', { name: /finance tracker|finanztracker/i })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /^dashboard$/i })).toBeVisible();
 	await expect(page.getByRole('heading', { name: /net worth|nettovermoegen/i })).toBeVisible();
 	await expect(page.getByLabel(/dashboard account|dashboard-konto/i)).toBeVisible();
 	await expect(
 		page.getByRole('heading', { name: /cashflow this month|cashflow diesen monat/i })
 	).toBeVisible();
-	await expect(page.getByRole('button', { name: /create account|konto erstellen/i })).toBeVisible();
+	await expect(page.getByRole('link', { name: /^accounts$|^konten$/i })).toBeVisible();
 });
 
 test('renders the CSV import shell', async ({ page }) => {
@@ -62,17 +62,13 @@ test('renders the planning shell', async ({ page }) => {
 	await page.goto('/planning');
 
 	await expect(page.getByRole('heading', { name: /^planning$|^planung$/i })).toBeVisible();
-	await expect(page.getByRole('heading', { name: /contracts|vertraege/i })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /create plan|plan erstellen/i })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /^expenses$|^ausgaben$/i })).toBeVisible();
+	await expect(page.getByRole('heading', { name: /^income$|^einnahmen$/i })).toBeVisible();
 	await expect(
-		page.getByRole('heading', { name: /^planned payments$|^geplante zahlungen$/i })
-	).toBeVisible();
-	await expect(
-		page.getByRole('heading', { name: /^planned income$|^geplante einnahmen$/i })
+		page.getByRole('heading', { name: /recurring suggestions|wiederkehrende vorschlaege/i })
 	).toBeVisible();
 	await expect(
 		page.getByRole('heading', { name: /^liabilities$|^verbindlichkeiten$/i })
-	).toBeVisible();
-	await expect(
-		page.getByLabel(/manual next salary date|manuelles naechstes gehaltsdatum/i)
 	).toBeVisible();
 });

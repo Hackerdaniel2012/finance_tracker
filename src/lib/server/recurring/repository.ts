@@ -1,14 +1,19 @@
+import { occurrenceDate } from '$lib/plans/cadence';
 import { NotFoundError, ValidationError } from '../accounts/errors';
 import type { DbClient, DbRow, DbStatement } from '../db-client';
 import type {
 	RecurringConfidenceFactors,
+	ConfirmRecurringSuggestionInput,
 	RecurringDirection,
 	RecurringEvidence,
 	RecurringGroup,
 	UpdateRecurringGroupInput
 } from './types';
+import type { Plan } from '../plans/types';
+import { getPlan } from '../plans/repository';
+import { insertLiabilityBaseline } from '../liabilities/baselines';
 
-const detectorVersion = 2;
+const detectorVersion = 3;
 const minimumConfidence = 70;
 const amountToleranceCents = 100;
 const amountToleranceRatio = 0.05;
@@ -19,9 +24,10 @@ const cadenceWindows: Array<{
 	maxDays: number;
 	maxStaleDays: number;
 }> = [
+	{ cadence: 'daily', targetDays: 1, minDays: 1, maxDays: 1, maxStaleDays: 14 },
 	{ cadence: 'weekly', targetDays: 7, minDays: 6, maxDays: 8, maxStaleDays: 28 },
 	{ cadence: 'biweekly', targetDays: 14, minDays: 12, maxDays: 16, maxStaleDays: 45 },
-	{ cadence: 'monthly', targetDays: 30, minDays: 26, maxDays: 35, maxStaleDays: 75 },
+	{ cadence: 'monthly', targetDays: 30, minDays: 26, maxDays: 35, maxStaleDays: 31 },
 	{ cadence: 'quarterly', targetDays: 91, minDays: 80, maxDays: 100, maxStaleDays: 210 },
 	{ cadence: 'yearly', targetDays: 365, minDays: 350, maxDays: 380, maxStaleDays: 550 }
 ];
@@ -32,6 +38,106 @@ export async function listRecurringGroups(db: DbClient): Promise<RecurringGroup[
 		.all<RecurringGroupRow>();
 	const evidence = await listRecurringEvidence(db);
 	return results.map((row) => mapRecurringGroup(row, evidence.get(row.id) ?? []));
+}
+
+export async function confirmRecurringSuggestion(
+	db: DbClient,
+	input: ConfirmRecurringSuggestionInput
+): Promise<Plan> {
+	const group = await getRecurringGroup(db, input.id);
+	if (!group) throw new NotFoundError('Recurring group not found');
+	if (group.status !== 'suggested')
+		throw new ValidationError('Recurring suggestion has already been handled');
+	const direction = input.direction ?? group.direction;
+	const categoryId = input.liability
+		? 'cat-installment-plan'
+		: input.categoryId === undefined
+			? group.categoryId
+			: input.categoryId;
+	const accountId = input.accountId === undefined ? group.accountId : input.accountId;
+	const cadence = input.cadence ?? group.cadence;
+	const amount = input.expectedAmountCents ?? group.expectedAmountCents;
+	const nextDate = input.nextDate === undefined ? group.nextDate : input.nextDate;
+	const endDate = input.endDate === undefined ? group.endDate : input.endDate;
+	if (!direction || !categoryId || !nextDate)
+		throw new ValidationError(
+			'Confirmed recurring groups require direction, category, and next date'
+		);
+	if (input.liability && direction !== 'outgoing')
+		throw new ValidationError('Liabilities can only be created from outgoing suggestions');
+	if (endDate && endDate < nextDate) throw new ValidationError('endDate cannot be before nextDate');
+	await assertOptionalLinks(db, accountId, categoryId);
+	const planId = crypto.randomUUID();
+	const liabilityId = input.liability ? crypto.randomUUID() : null;
+	const planDirection = direction === 'incoming' ? 'income' : 'expense';
+	const statements: DbStatement[] = [];
+	if (input.liability && liabilityId) {
+		statements.push(
+			db
+				.prepare(
+					`INSERT INTO marked_liabilities (
+				id, account_id, name, amount_cents, as_of_date, annual_interest_rate_bps, status
+			) VALUES (?, ?, ?, ?, ?, ?, 'active')`
+				)
+				.bind(
+					liabilityId,
+					accountId,
+					input.liability.name,
+					input.liability.amountCents,
+					input.liability.asOfDate,
+					input.liability.annualInterestRateBps
+				)
+		);
+		statements.push(
+			await insertLiabilityBaseline(
+				db,
+				liabilityId,
+				input.liability.amountCents,
+				input.liability.asOfDate
+			)
+		);
+	}
+	statements.push(
+		db
+			.prepare(
+				`INSERT INTO plans (id, account_id, category_id, label, counterparty, direction, cadence, amount_cents, next_date, end_date, status, source, source_recurring_group_id, liability_id, schedule_anchor_date, schedule_occurrence_index, manual_status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'recurring_suggestion', ?, ?, ?, 0, 'active')`
+			)
+			.bind(
+				planId,
+				accountId,
+				categoryId,
+				input.label === undefined ? group.label : input.label,
+				input.payee ?? group.payee,
+				planDirection,
+				cadence,
+				amount,
+				nextDate,
+				endDate,
+				group.id,
+				liabilityId,
+				nextDate
+			),
+		db
+			.prepare(
+				"UPDATE recurring_groups SET status = 'confirmed', source = 'confirmed_suggestion', needs_review = 0, plan_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'suggested'"
+			)
+			.bind(planId, group.id)
+	);
+	const { results: evidence } = await db
+		.prepare('SELECT transaction_id FROM recurring_group_transactions WHERE recurring_group_id = ?')
+		.bind(group.id)
+		.all<EvidenceIdRow>();
+	for (const entry of evidence)
+		statements.push(
+			db
+				.prepare('INSERT OR IGNORE INTO plan_transactions (plan_id, transaction_id) VALUES (?, ?)')
+				.bind(planId, entry.transaction_id)
+		);
+	await runBatch(db, statements);
+	const plan = await getPlan(db, planId);
+	if (!plan) throw new NotFoundError('Created plan could not be loaded');
+	return plan;
 }
 
 export async function rebuildRecurringSuggestions(
@@ -101,21 +207,18 @@ export async function updateRecurringGroup(
 ): Promise<RecurringGroup> {
 	const existing = await getRecurringGroup(db, input.id);
 	if (!existing) throw new NotFoundError('Recurring group not found');
+	if (existing.status !== 'suggested')
+		throw new ValidationError('Only open recurring suggestions can be updated');
 	await assertOptionalLinks(db, input.accountId, input.categoryId);
 
 	const direction = input.direction ?? existing.direction;
 	const categoryId = input.categoryId === undefined ? existing.categoryId : input.categoryId;
 	const cadence = input.cadence ?? existing.cadence;
 	const amount = input.expectedAmountCents ?? existing.expectedAmountCents;
-	let nextDate = input.nextDate === undefined ? existing.nextDate : input.nextDate;
-	if (input.status === 'confirmed') {
-		if (!direction || !categoryId || !nextDate) {
-			throw new ValidationError(
-				'Confirmed recurring groups require direction, category, and next date'
-			);
-		}
-		nextDate = rollForwardToDate(nextDate, cadence, todayIso());
-	}
+	const nextDate = input.nextDate === undefined ? existing.nextDate : input.nextDate;
+	const endDate = input.endDate === undefined ? existing.endDate : input.endDate;
+	if (nextDate && endDate && endDate < nextDate)
+		throw new ValidationError('endDate must be on or after nextDate');
 
 	const payee = input.payee ?? existing.payee;
 	const label = input.label === undefined ? existing.label : input.label;
@@ -124,6 +227,7 @@ export async function updateRecurringGroup(
 			`UPDATE recurring_groups
 			SET account_id = ?, category_id = ?, label = ?, payee = ?, direction = ?,
 				canonical_payee_key = ?, cadence = ?, expected_amount_cents = ?, next_date = ?,
+				end_date = ?,
 				status = ?, confidence = ?, source = ?, needs_review = ?, detector_version = ?,
 				updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?`
@@ -138,10 +242,11 @@ export async function updateRecurringGroup(
 			cadence,
 			amount,
 			nextDate,
+			endDate,
 			input.status ?? existing.status,
 			input.confidence ?? existing.confidence,
-			input.source ?? (input.status === 'confirmed' ? 'confirmed_suggestion' : existing.source),
-			input.status === 'confirmed' ? 0 : existing.needsReview ? 1 : 0,
+			input.source ?? existing.source,
+			input.status === 'ignored' ? 0 : existing.needsReview ? 1 : 0,
 			detectorVersion,
 			input.id
 		)
@@ -193,38 +298,26 @@ function groupRecurringCandidates(rows: CandidateTransactionRow[]): RecurringCan
 		exactGroups.set(exactKey, group);
 	}
 
-	const merged: RecurringCandidate[] = [];
-	const tokenIndex = new Map<string, RecurringCandidate[]>();
-	for (const candidate of exactGroups.values()) {
-		const amount = average(candidate.transactions.map((item) => Math.abs(item.amount_cents)));
-		const tokens = candidate.canonicalPayeeKey.split(' ').filter((token) => token.length >= 3);
-		const indexed = tokens.flatMap(
-			(token) => tokenIndex.get([candidate.accountId, candidate.direction, token].join('|')) ?? []
-		);
-		const alias = indexed.find((item) =>
+	return [...exactGroups.values()].flatMap(splitCandidateByAmount);
+}
+
+function splitCandidateByAmount(candidate: RecurringCandidate): RecurringCandidate[] {
+	const groups: RecurringCandidate[] = [];
+	for (const transaction of candidate.transactions) {
+		const amount = Math.abs(transaction.amount_cents);
+		const group = groups.find((item) =>
 			amountsAreSimilar(
-				average(item.transactions.map((transaction) => Math.abs(transaction.amount_cents))),
+				average(item.transactions.map((entry) => Math.abs(entry.amount_cents))),
 				amount
 			)
 		);
-		if (alias) {
-			alias.transactions.push(...candidate.transactions);
-			if (alias.categoryId !== candidate.categoryId) alias.categoryId = null;
-			alias.canonicalPayeeKey =
-				sharedDistinctiveToken(alias.canonicalPayeeKey, candidate.canonicalPayeeKey) ??
-				alias.canonicalPayeeKey;
-			continue;
-		}
-
-		merged.push(candidate);
-		for (const token of tokens) {
-			const key = [candidate.accountId, candidate.direction, token].join('|');
-			const entries = tokenIndex.get(key) ?? [];
-			entries.push(candidate);
-			tokenIndex.set(key, entries);
+		if (group) {
+			group.transactions.push(transaction);
+		} else {
+			groups.push({ ...candidate, transactions: [transaction] });
 		}
 	}
-	return merged;
+	return groups;
 }
 
 function inferRecurringPattern(
@@ -233,25 +326,46 @@ function inferRecurringPattern(
 ): RecurringPattern | null {
 	if (transactions.length < 3) return null;
 	const sorted = [...transactions].sort((a, b) => a.booking_date.localeCompare(b.booking_date));
+	const dailyPattern = inferDailyPattern(sorted, asOf);
+	if (dailyPattern) return dailyPattern;
 	const recent = sorted.slice(-3);
 	const amounts = recent.map((transaction) => Math.abs(transaction.amount_cents));
 	const expectedAmount = average(amounts);
-	const tolerance = Math.max(amountToleranceCents, expectedAmount * amountToleranceRatio);
+	const tolerance = amountTolerance(expectedAmount);
 	if (amounts.some((amount) => Math.abs(amount - expectedAmount) > tolerance)) return null;
-
-	const intervals = [
-		daysBetween(recent[0].booking_date, recent[1].booking_date),
-		daysBetween(recent[1].booking_date, recent[2].booking_date)
-	];
-	const window = cadenceWindows.find((item) =>
-		intervals.every((interval) => interval >= item.minDays && interval <= item.maxDays)
-	);
-	if (!window) return null;
+	const maxDateDrift = 3;
+	const window = cadenceWindows
+		.filter(
+			(item) =>
+				item.cadence !== 'daily' &&
+				recent
+					.slice(1)
+					.every(
+						(transaction, index) =>
+							cadenceDateMultiple(
+								recent[index].booking_date,
+								transaction.booking_date,
+								item,
+								maxDateDrift
+							) !== null
+					)
+		)
+		.sort(
+			(left, right) =>
+				cadenceFitScore(recent, left, maxDateDrift) - cadenceFitScore(recent, right, maxDateDrift)
+		)[0];
+	if (!window || window.cadence === 'daily') return null;
 	const lastDate = recent[2].booking_date;
 	const staleDays = daysBetween(lastDate, asOf);
 	if (staleDays > window.maxStaleDays) return null;
 
-	const intervalError = average(intervals.map((value) => Math.abs(value - window.targetDays)));
+	const intervalError = average(
+		recent
+			.slice(1)
+			.map((transaction, index) =>
+				cadenceDateError(recent[index].booking_date, transaction.booking_date, window, maxDateDrift)
+			)
+	);
 	const amountErrorRatio =
 		average(amounts.map((value) => Math.abs(value - expectedAmount))) / expectedAmount;
 	const factors: RecurringConfidenceFactors = {
@@ -261,13 +375,97 @@ function inferRecurringPattern(
 		),
 		amount: Math.max(0, Math.round(30 * (1 - amountErrorRatio / amountToleranceRatio))),
 		history: transactions.length >= 4 ? 20 : 10,
-		recency: staleDays <= window.targetDays * 1.5 ? 10 : 5
+		recency: staleDays <= window.targetDays * 1.5 ? 10 : staleDays <= window.maxStaleDays ? 5 : 0
 	};
 
 	return {
 		cadence: window.cadence,
 		expectedAmountCents: Math.round(expectedAmount),
 		nextDate: advanceToDate(lastDate, window.cadence, asOf),
+		confidence: Object.values(factors).reduce((sum, value) => sum + value, 0),
+		factors
+	};
+}
+
+function cadenceFitScore(
+	transactions: CandidateTransactionRow[],
+	window: (typeof cadenceWindows)[number],
+	maxDateDrift: number
+): number {
+	return average(
+		transactions.slice(1).map((transaction, index) => {
+			const from = transactions[index].booking_date;
+			const multiple =
+				cadenceDateMultiple(from, transaction.booking_date, window, maxDateDrift) ?? 1;
+			return (
+				cadenceDateError(from, transaction.booking_date, window, maxDateDrift) + (multiple - 1) * 2
+			);
+		})
+	);
+}
+
+function cadenceDateMultiple(
+	from: string,
+	to: string,
+	window: (typeof cadenceWindows)[number],
+	maxDateDrift: number
+): number | null {
+	for (const multiple of [1, 2]) {
+		const expected = addCadenceMultiple(from, window.cadence, multiple);
+		if (Math.abs(daysBetween(expected, to)) <= maxDateDrift) return multiple;
+	}
+	return null;
+}
+
+function cadenceDateError(
+	from: string,
+	to: string,
+	window: (typeof cadenceWindows)[number],
+	maxDateDrift: number
+): number {
+	const multiple = cadenceDateMultiple(from, to, window, maxDateDrift) ?? 1;
+	return Math.abs(daysBetween(addCadenceMultiple(from, window.cadence, multiple), to));
+}
+
+function inferDailyPattern(
+	transactions: CandidateTransactionRow[],
+	asOf: string
+): RecurringPattern | null {
+	const byDate = new Map<string, CandidateTransactionRow>();
+	for (const transaction of transactions) byDate.set(transaction.booking_date, transaction);
+	const unique = [...byDate.values()].sort((a, b) => a.booking_date.localeCompare(b.booking_date));
+	let current: CandidateTransactionRow[] = [];
+	let longest: CandidateTransactionRow[] = [];
+	for (const transaction of unique) {
+		if (
+			current.length === 0 ||
+			daysBetween(current[current.length - 1].booking_date, transaction.booking_date) === 1
+		) {
+			current.push(transaction);
+		} else {
+			current = [transaction];
+		}
+		if (current.length > longest.length) longest = [...current];
+	}
+	if (longest.length < 7) return null;
+
+	const amounts = longest.map((transaction) => Math.abs(transaction.amount_cents));
+	const expectedAmount = average(amounts);
+	if (amounts.some((amount) => amount !== expectedAmount)) {
+		return null;
+	}
+	const lastDate = longest[longest.length - 1].booking_date;
+	const staleDays = daysBetween(lastDate, asOf);
+	const factors: RecurringConfidenceFactors = {
+		interval: 40,
+		amount: 30,
+		history: Math.min(20, 5 + Math.floor(((longest.length - 7) * 15) / 14)),
+		recency: staleDays <= 2 ? 10 : staleDays <= 14 ? 5 : 0
+	};
+	return {
+		cadence: 'daily',
+		expectedAmountCents: Math.round(expectedAmount),
+		nextDate: advanceToDate(lastDate, 'daily', asOf),
 		confidence: Object.values(factors).reduce((sum, value) => sum + value, 0),
 		factors
 	};
@@ -283,8 +481,7 @@ function hasExistingRecurringGroup(
 			row.account_id === candidate.accountId &&
 			row.direction === candidate.direction &&
 			row.cadence === pattern.cadence &&
-			(row.canonical_payee_key === candidate.canonicalPayeeKey ||
-				sharedDistinctiveToken(row.canonical_payee_key, candidate.canonicalPayeeKey) !== null) &&
+			row.canonical_payee_key === candidate.canonicalPayeeKey &&
 			amountsAreSimilar(row.expected_amount_cents, pattern.expectedAmountCents)
 	);
 }
@@ -366,7 +563,8 @@ async function listRecurringEvidence(
 ): Promise<Map<string, RecurringEvidence[]>> {
 	const clause = groupId ? 'WHERE rgt.recurring_group_id = ?' : '';
 	const statement = db.prepare(
-		`SELECT rgt.recurring_group_id, t.id AS transaction_id, t.booking_date, t.amount_cents, t.payee
+		`SELECT rgt.recurring_group_id, t.id AS transaction_id, t.booking_date, t.amount_cents,
+			t.payee, t.description
 		FROM recurring_group_transactions rgt
 		INNER JOIN transactions t ON t.id = rgt.transaction_id
 		${clause}
@@ -383,7 +581,8 @@ async function listRecurringEvidence(
 				transactionId: row.transaction_id,
 				bookingDate: row.booking_date,
 				amountCents: row.amount_cents,
-				payee: row.payee
+				payee: row.payee,
+				description: row.description
 			});
 			map.set(row.recurring_group_id, entries);
 		}
@@ -395,7 +594,7 @@ function recurringGroupSelect(): string {
 	return `SELECT rg.id, rg.account_id, a.name AS account_name,
 		rg.category_id, c.name AS category_name, rg.label, rg.payee,
 		rg.direction, rg.canonical_payee_key, rg.cadence, rg.expected_amount_cents,
-		rg.next_date, rg.status, rg.confidence, rg.source, rg.needs_review,
+		rg.next_date, rg.end_date, rg.status, rg.confidence, rg.source, rg.needs_review,
 		rg.detector_version,
 		(SELECT COUNT(*) FROM recurring_group_transactions rgt WHERE rgt.recurring_group_id = rg.id)
 			AS transaction_count,
@@ -462,13 +661,12 @@ export function canonicalizePayee(payee: string): string {
 	return [...new Set(tokens)].sort().join(' ') || payee.trim().toLowerCase();
 }
 
-function sharedDistinctiveToken(left: string, right: string): string | null {
-	const rightTokens = new Set(right.split(' '));
-	return left.split(' ').find((token) => token.length >= 3 && rightTokens.has(token)) ?? null;
+function amountsAreSimilar(left: number, right: number): boolean {
+	return Math.abs(left - right) <= amountTolerance(average([Math.abs(left), Math.abs(right)]));
 }
 
-function amountsAreSimilar(left: number, right: number): boolean {
-	return Math.abs(left - right) <= Math.max(amountToleranceCents, left * amountToleranceRatio);
+function amountTolerance(amount: number): number {
+	return Math.min(amountToleranceCents, Math.max(1, amount * amountToleranceRatio));
 }
 
 function average(values: number[]): number {
@@ -487,9 +685,12 @@ function advanceToDate(
 	cadence: RecurringGroup['cadence'],
 	minimumDate: string
 ): string {
-	let next = date;
-	do next = addCadence(next, cadence);
-	while (next < minimumDate);
+	let index = 1;
+	let next = occurrenceDate(date, cadence, index);
+	while (next < minimumDate) {
+		index += 1;
+		next = occurrenceDate(date, cadence, index);
+	}
 	return next;
 }
 
@@ -498,31 +699,21 @@ function rollForwardToDate(
 	cadence: RecurringGroup['cadence'],
 	minimumDate: string
 ): string {
+	let index = 0;
 	let next = date;
-	while (next < minimumDate) next = addCadence(next, cadence);
+	while (next < minimumDate) {
+		index += 1;
+		next = occurrenceDate(date, cadence, index);
+	}
 	return next;
 }
 
-function addCadence(date: string, cadence: RecurringGroup['cadence']): string {
-	const next = new Date(`${date}T00:00:00.000Z`);
-	switch (cadence) {
-		case 'weekly':
-			next.setUTCDate(next.getUTCDate() + 7);
-			break;
-		case 'biweekly':
-			next.setUTCDate(next.getUTCDate() + 14);
-			break;
-		case 'monthly':
-			next.setUTCMonth(next.getUTCMonth() + 1);
-			break;
-		case 'quarterly':
-			next.setUTCMonth(next.getUTCMonth() + 3);
-			break;
-		case 'yearly':
-			next.setUTCFullYear(next.getUTCFullYear() + 1);
-			break;
-	}
-	return next.toISOString().slice(0, 10);
+function addCadenceMultiple(
+	date: string,
+	cadence: RecurringGroup['cadence'],
+	multiple: number
+): string {
+	return occurrenceDate(date, cadence, multiple);
 }
 
 function todayIso(): string {
@@ -547,6 +738,7 @@ function mapRecurringGroup(row: RecurringGroupRow, evidence: RecurringEvidence[]
 		cadence: row.cadence,
 		expectedAmountCents: row.expected_amount_cents,
 		nextDate: row.next_date,
+		endDate: row.end_date,
 		status: row.status,
 		confidence: row.confidence,
 		confidenceFactors,
@@ -584,6 +776,7 @@ interface RecurringGroupRow extends DbRow {
 	cadence: RecurringGroup['cadence'];
 	expected_amount_cents: number;
 	next_date: string | null;
+	end_date: string | null;
 	status: RecurringGroup['status'];
 	confidence: number;
 	source: RecurringGroup['source'];
@@ -599,6 +792,7 @@ interface EvidenceRow extends DbRow {
 	booking_date: string;
 	amount_cents: number;
 	payee: string | null;
+	description: string | null;
 }
 interface CandidateTransactionRow extends DbRow {
 	id: string;
@@ -630,6 +824,9 @@ interface IdRow extends DbRow {
 interface ExistingPayeeRow extends DbRow {
 	id: string;
 	payee: string;
+}
+interface EvidenceIdRow extends DbRow {
+	transaction_id: string;
 }
 interface ExistingRecurringRow extends DbRow {
 	id: string;

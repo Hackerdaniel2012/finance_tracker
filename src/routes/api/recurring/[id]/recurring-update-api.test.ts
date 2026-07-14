@@ -16,23 +16,29 @@ beforeEach(async () => {
 });
 
 describe('/api/recurring/:id', () => {
-	it('updates recurring groups', async () => {
+	it('updates recurring groups without confirming them', async () => {
 		const id = await insertRecurringGroup();
 
 		const response = await PATCH(
 			event(id, {
-				status: 'confirmed',
+			status: 'ignored',
 				confidence: 100,
 				direction: 'outgoing',
 				categoryId: 'cat-housing',
 				cadence: 'monthly',
 				expectedAmountCents: 90000,
-				nextDate: '2026-07-31'
+				nextDate: '2026-07-31',
+				endDate: '2026-12-31'
 			})
 		);
 
 		await expect(response.json()).resolves.toMatchObject({
-			recurringGroup: { id, status: 'confirmed', confidence: 100 }
+			recurringGroup: {
+				id,
+				status: 'ignored',
+				confidence: 100,
+				endDate: '2026-12-31'
+			}
 		});
 	});
 
@@ -43,6 +49,12 @@ describe('/api/recurring/:id', () => {
 		expect(invalid.status).toBe(400);
 		await expect(invalid.json()).resolves.toEqual({
 			error: 'confidence must be an integer between 0 and 100'
+		});
+
+		const confirmation = await PATCH(event(id, { status: 'confirmed' }));
+		expect(confirmation.status).toBe(400);
+		await expect(confirmation.json()).resolves.toEqual({
+			error: 'Recurring suggestions can only be confirmed through the confirm endpoint'
 		});
 
 		const invalidDate = await PATCH(event(id, { nextDate: '2026-02-31' }));

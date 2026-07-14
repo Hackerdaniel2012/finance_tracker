@@ -10,16 +10,15 @@
     Wrangler.
 
   - Privacy defaults: no auth in v1, no raw CSV storage, no raw row logging, no external AI.
-  - Core product scope: per-account transaction search, CSV import, categorization review, recurring contracts/payments, separate current-month upcoming payments and income, balance-before-salary
-    projection, and net worth history.
+  - Core product scope: per-account transaction search, CSV import, categorization review, unified expense/income plans, recurring suggestions, balance-before-next-income projection, liabilities, and net worth history.
 
   ## Key Changes
 
   - Scaffold in the existing workspace with SvelteKit minimal TypeScript, Cloudflare adapter for Pages, Tailwind Forms, Paraglide for en/de, LayerChart for dashboard plots, and pnpm scripts for dev, build,
     check, test, and test:e2e.
 
-  - Add D1 schema for accounts, import profiles, import batches, transactions, categories, category rules, tags, transaction tags, recurring groups, recurring group transactions, planned payments, contracts,
-    account balance snapshots, marked liabilities, transaction review flags, and import row errors.
+  - Add D1 schema for accounts, import profiles, import batches, transactions, categories, category rules, tags, transaction tags, recurring groups, recurring group transactions, plans, plan transactions,
+    account balance snapshots, liabilities, transaction review flags, and import row errors.
   - Implement bank adapters behind a shared interface:
 
     type BankId = 'n26' | 'trade_republic' | 'dkb';
@@ -44,18 +43,17 @@
 
   - Categorization uses editable seeded categories, global-by-default rules, manual transaction overrides, and an explicit “create rule from this edit” path.
   - Recurring detection is conservative: suggest only after at least three similar transactions with stable cadence; suggestions can be confirmed/ignored later.
-  - Add a contracts and recurring payments workspace for fixed costs, subscriptions, salary/income, and other repeating payments. Store rhythm/cadence, expected amount, next date, optional end date or
-    duration, linked account/profile, category, payee, status, and whether it was manually created, imported, or confirmed from a recurring suggestion.
-  - Add planned one-off payments and planned one-off income for known expected current-month items that are not recurring contracts.
+  - Add one plan workspace for one-off and recurring expenses and income. Store cadence, expected amount, next date, optional end date, linked account, category, payee, status, origin, and matched transactions.
+  - Keep recurring suggestions separate until they are confirmed; confirmation atomically creates a plan and preserves its supporting transactions as evidence.
   - Add an unknown transactions review queue backed by an explicit review flag/status. Imported payments without a category or rule match are flagged for review; the queue supports manual
     classification, optional rule creation, and clearing the review flag once handled.
   - Reports default to the last 12 months, support per-account and combined views, count Trade Republic buys/sells in main cashflow, and do not special-case internal transfers.
   - Add an all-transactions view for each account with a searchable, sortable, paginated table of incoming and outgoing payments.
   - Add a net worth chart with stock-like time-series behavior. It supports combined and per-account views, uses imported balance-after-transaction values where available, falls back to configured
     starting/current balances plus transaction deltas, excludes manually tracked assets in v1, and includes manually marked liabilities.
-  - Add an upcoming payments view for the current month, combining only outgoing confirmed contracts/recurring payments and outgoing planned one-off payments.
-  - Add a separate upcoming income view for the current month, combining confirmed salary/income contracts and planned one-off income.
-  - Add a balance-before-salary estimate: current balance minus expected outgoing planned/recurring payments before the next confirmed salary date, shown per account and combined.
+  - Derive current-month expense and income outlooks exclusively from active plans, respecting cadence, status, end date, and matched transactions.
+  - Add a balance-before-next-income estimate using the next active income plan regardless of category or cadence.
+  - Match imported transactions conservatively to plan occurrences; unique matches advance recurring plans, complete one-off plans, and can be reversed when an import is deleted.
 
   ## API Surface
 
@@ -71,21 +69,17 @@
   - GET/POST/PATCH /api/categories, GET/POST/PATCH /api/category-rules: maintain category taxonomy and matching rules.
   - GET /api/summary: account/combined cashflow, category trends, balances, and chart-ready series.
   - GET /api/net-worth: account/combined net worth time series for charting.
-  - GET /api/recurring, PATCH /api/recurring/:id: recurring suggestions and status updates.
-  - GET/POST/PATCH/DELETE /api/contracts: maintain fixed costs, subscriptions, salary/income, and other confirmed recurring payments.
-  - GET/POST/PATCH/DELETE /api/planned-payments: maintain known one-off upcoming outgoing payments.
-  - GET/POST/PATCH/DELETE /api/planned-income: maintain known one-off upcoming income.
+  - GET /api/recurring, PATCH /api/recurring/:id, POST /api/recurring/:id/confirm: review, ignore, or confirm recurring suggestions.
+  - GET/POST/PATCH/DELETE /api/plans: maintain one-off and recurring expense/income plans.
   - GET/POST/PATCH/DELETE /api/liabilities: maintain manually marked liabilities included in net worth.
-  - GET /api/upcoming-payments: current-month expected outgoing payments from outgoing contracts and planned one-offs.
-  - GET /api/upcoming-income: current-month expected income from salary/income contracts and planned one-offs.
-  - GET /api/balance-before-salary: projected balance before the next confirmed salary date.
+  - GET /api/balance-before-income: projected balance before the next active income-plan occurrence.
 
   ## Test Plan
 
   - Unit-test N26, Trade Republic, and DKB adapters against existing fixtures, including headers/preambles, date parsing, amount signs, currency fields, direction handling, dedupe keys, and skipped malformed
     rows.
   - Add D1 integration tests for migrations, one-to-one account/profile linkage, import preview/confirm, dedupe, batch deletion, categorization rules, transaction edits, transaction search/filtering,
-    summaries, net worth series with marked liabilities, contracts, planned payments, planned income, separate upcoming payments/income, balance-before-salary estimates, review-flagged unknown transaction
+    summaries, net worth series with liabilities, plan CRUD/matching/rollback, recurring confirmation, balance-before-next-income estimates, review-flagged unknown transaction
     queues, and recurring suggestions.
   - Add one Playwright smoke test: create profile/account, preview fixture CSV, confirm import, view dashboard, search account transactions, review an unknown transaction, change one category, and verify
     chart/table updates.
@@ -97,8 +91,7 @@
   - UI and default labels are bilingual through i18n; browser language chooses de or en, with English fallback.
   - Raw CSV contents are discarded after each request; import metadata stores only file hash, counts, adapter/profile, and timing.
   - An account is the product-facing container for transactions and balances; in v1, each account maps one-to-one to exactly one import profile.
-  - Balance-before-salary depends on a confirmed salary/income contract or an explicit manual next salary date; do not infer salary automatically until the user confirms a recurring income suggestion.
-  - Upcoming payments include only outgoing confirmed contracts/recurring payments and outgoing manually planned one-offs, not unconfirmed recurring suggestions.
-  - Upcoming income is shown separately from upcoming payments.
+  - Balance-before-next-income uses the next active income plan; an optional manual projection date may override it.
+  - Expense and income outlooks use active plans only; unconfirmed recurring suggestions are never counted.
   - Net worth excludes manually tracked assets in v1 and includes manually marked liabilities.
   - Unknown transactions are transactions explicitly flagged for review, including imported rows without a category or rule match.

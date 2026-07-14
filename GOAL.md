@@ -88,12 +88,11 @@ Implement:
 - Account transaction search/filter/sort/pagination
 - Summary dashboard
 - Net worth chart
-- Contracts and recurring payments
-- Planned one-off payments
-- Planned one-off income
-- Current-month upcoming outgoing payments
-- Current-month upcoming income
-- Balance-before-salary projection
+- Unified one-off and recurring expense/income plans
+- Recurring suggestions with confirmation and supporting evidence
+- Current-month expense and income outlooks
+- Balance-before-next-income projection
+- Liabilities with interest and linked installment plans
 - Basic bilingual UI labels through i18n
 
 Data model
@@ -110,9 +109,9 @@ Create D1 migrations for at least:
 - transaction_tags
 - recurring_groups
 - recurring_group_transactions
-- planned_payments
-- planned_income
-- contracts
+- plans
+- plan_transactions
+- liabilities
 - account_balance_snapshots
 - marked_liabilities
 - transaction_review_flags
@@ -198,25 +197,16 @@ GET /api/summary
 GET /api/net-worth
 GET /api/recurring
 PATCH /api/recurring/:id
-GET /api/contracts
-POST /api/contracts
-PATCH /api/contracts
-DELETE /api/contracts
-GET /api/planned-payments
-POST /api/planned-payments
-PATCH /api/planned-payments
-DELETE /api/planned-payments
-GET /api/planned-income
-POST /api/planned-income
-PATCH /api/planned-income
-DELETE /api/planned-income
+POST /api/recurring/:id/confirm
+GET /api/plans
+POST /api/plans
+PATCH /api/plans
+DELETE /api/plans
 GET /api/liabilities
 POST /api/liabilities
 PATCH /api/liabilities
 DELETE /api/liabilities
-GET /api/upcoming-payments
-GET /api/upcoming-income
-GET /api/balance-before-salary
+GET /api/balance-before-income
 
 Import flow
 
@@ -266,7 +256,7 @@ The unknown queue must support:
 - optional rule creation
 - clearing the review flag once handled
 
-Recurring, contracts, planned payments, and income
+Recurring suggestions and plans
 
 Recurring detection must be conservative:
 
@@ -274,42 +264,16 @@ Recurring detection must be conservative:
 - require stable cadence
 - suggestions must be confirmable or ignorable later
 
-Contracts must support:
+Plans must support:
 
-- fixed costs
-- subscriptions
-- salary/income
-- other repeating payments
-- cadence/rhythm
-- expected amount
-- next date
-- optional end date or duration
-- linked account/profile
-- category
-- payee
-- status
-- source: manual, imported, or confirmed recurring suggestion
+- expense and income directions
+- once, daily, weekly, biweekly, monthly, quarterly, and yearly cadence
+- expected amount, next date, and optional end date
+- linked account, category, payee, status, source, and notes
+- automatic transaction matching with an auditable, reversible match ledger
+- deterministic calendar anchoring for month-end and leap-year schedules
 
-Upcoming payments:
-
-- current month only
-- outgoing confirmed contracts/recurring payments
-- outgoing planned one-off payments
-- exclude unconfirmed recurring suggestions
-
-Upcoming income:
-
-- current month only
-- confirmed salary/income contracts
-- planned one-off income
-- shown separately from upcoming payments
-
-Balance-before-salary:
-
-- current balance minus expected outgoing planned/recurring payments before next confirmed salary date
-- show per account and combined
-- depend on confirmed salary/income contract or explicit manual next salary date
-- do not infer salary automatically until user confirms recurring income suggestion
+Current-month outlooks use active plans only and exclude unconfirmed recurring suggestions. Balance-before-next-income uses the next active income plan regardless of category or cadence, or an explicit manual projection date.
 
 Reports and charts
 
@@ -348,12 +312,11 @@ Build a practical UI for:
 - transaction search/filter/sort/pagination
 - unknown transaction review
 - category editing
-- contracts
-- planned payments
-- planned income
-- upcoming payments
-- upcoming income
-- balance-before-salary
+- expense and income plans
+- recurring suggestions
+- current-month plan outlooks
+- balance-before-next-income
+- liabilities
 - net worth chart
 
 Use Paraglide/i18n for default English and German labels. Browser language should choose German or English, with English fallback.
@@ -407,12 +370,11 @@ Add integration tests for:
 - transaction search/filtering
 - summary reports
 - net worth series with marked liabilities
-- contracts
-- planned payments
-- planned income
-- upcoming payments
-- upcoming income
-- balance-before-salary estimates
+- plan CRUD, matching, rollback, status, and end dates
+- recurring confirmation and evidence preservation
+- current-month plan outlooks
+- balance-before-next-income estimates
+- liability-plan invariants and interest projections
 - review-flagged unknown transaction queues
 - recurring suggestions
 
@@ -553,15 +515,15 @@ Run checks/tests.
 
 Commit reporting feature.
 
-Phase 9 — Contracts, recurring, planned payments/income
+Phase 9 — Plans, recurring suggestions, and liabilities
 
-Implement contracts, planned payments, planned income, recurring suggestions, confirmation/ignore flow, upcoming payments, upcoming income, and balance-before-salary.
+Implement unified expense/income plans, recurring suggestions, confirmation/ignore flow, current-month outlooks, balance-before-next-income, and linked liabilities.
 
 Add API/integration tests.
 
 Run checks/tests.
 
-Commit recurring/planning feature.
+Commit plans/recurring/liabilities feature.
 
 Phase 10 — Full Playwright smoke test and polish
 
@@ -609,8 +571,8 @@ V1 is complete only when:
 - Import preview writes nothing.
 - Import confirm dedupes and records import metadata.
 - Unknown transactions are reviewable and clearable.
-- Upcoming payments and upcoming income are separate.
-- Balance-before-salary uses confirmed salary/income only.
+- Expense and income outlooks are separate and derive only from plans.
+- Balance-before-next-income uses the next active income plan.
 - Net worth includes marked liabilities and excludes manual assets.
 - No raw CSV is persisted or logged.
 - pnpm check passes.

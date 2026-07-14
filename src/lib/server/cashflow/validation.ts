@@ -5,19 +5,18 @@ const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseCashflowWindow(url: URL, today = new Date()): CashflowWindow {
 	const asOf = optionalDate(url.searchParams.get('asOf'), 'asOf') ?? toIsoDate(today);
-	const nextSalaryDate =
-		optionalDate(url.searchParams.get('nextSalaryDate'), 'nextSalaryDate') ?? null;
+	const nextIncomeDate = optionalDate(url.searchParams.get('nextIncomeDate'), 'nextIncomeDate') ?? null;
 	const accountId = optionalQueryString(url, 'accountId');
 	const subaccount = optionalQueryString(url, 'subaccount');
 
-	if (nextSalaryDate !== null && nextSalaryDate <= asOf) {
-		throw new ValidationError('nextSalaryDate must be after asOf');
+	if (nextIncomeDate !== null && nextIncomeDate <= asOf) {
+		throw new ValidationError('nextIncomeDate must be after asOf');
 	}
 
 	return {
 		asOf,
 		monthEnd: endOfMonth(asOf),
-		nextSalaryDate,
+		nextIncomeDate,
 		accountId,
 		subaccount
 	};

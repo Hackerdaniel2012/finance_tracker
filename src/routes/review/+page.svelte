@@ -471,7 +471,7 @@
 							/>
 						</label>
 						<button
-							class="rounded border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-950"
+							class="h-11 rounded border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-950"
 							type="submit"
 						>
 							{m.apply_filters()}
@@ -515,7 +515,7 @@
 				</p>
 				<div class="flex gap-2">
 					<button
-						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-50"
+						class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-50"
 						type="button"
 						disabled={!canGoToPreviousUnknownPage}
 						onclick={goToPreviousUnknownPage}
@@ -523,7 +523,7 @@
 						{m.previous_page()}
 					</button>
 					<button
-						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-50"
+						class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-50"
 						type="button"
 						disabled={!canGoToNextUnknownPage}
 						onclick={goToNextUnknownPage}
@@ -583,7 +583,7 @@
 							<input class="w-full rounded border-zinc-300" bind:value={transactionRuleName} />
 						</label>
 						<button
-							class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+							class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700"
 							type="button"
 							onclick={previewTransactionRule}
 						>
@@ -600,7 +600,7 @@
 						{/if}
 					{/if}
 					<button
-						class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+							class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSavingTransaction || !transactionCategoryId}
 					>
@@ -618,7 +618,7 @@
 			<div class="flex items-center justify-between border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.categories_title()}</h2>
 				<button
-					class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+					class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700"
 					type="button"
 					onclick={startNewCategory}
 				>
@@ -673,7 +673,7 @@
 						<input class="w-full rounded border-zinc-300" bind:value={categorySortOrder} />
 					</label>
 					<button
-						class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+						class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSavingCategory}
 					>
@@ -688,7 +688,7 @@
 				<h2 class="text-lg font-semibold text-zinc-950">{m.category_rules_title()}</h2>
 				<div class="flex gap-2">
 					<button
-						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 disabled:opacity-50"
+						class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-50"
 						type="button"
 						disabled={isReapplyingRules}
 						onclick={reapplyRules}
@@ -696,7 +696,7 @@
 						{m.reapply_rules()}
 					</button>
 					<button
-						class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
+						class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700"
 						type="button"
 						onclick={startNewRule}
 					>
@@ -770,7 +770,7 @@
 						<span>{m.global_rule()}</span>
 					</label>
 					<button
-						class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+							class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSavingRule || !ruleCategoryId}
 					>

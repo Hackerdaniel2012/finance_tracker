@@ -1,0 +1,10 @@
+import { json } from '@sveltejs/kit';
+import { jsonError, getRequestDatabase, readJson } from '$lib/server/api';
+import { createPlan, deletePlan, getPlan, listPlans, updatePlan } from '$lib/server/plans/repository';
+import { parseCreatePlanInput, parseDeletePlanInput, parseUpdatePlanInput } from '$lib/server/plans/validation';
+import { reconcilePlans } from '$lib/server/plans/matching';
+import type { RequestHandler } from './$types';
+export const GET: RequestHandler = async (event) => json({ plans: await listPlans(getRequestDatabase(event)) });
+export const POST: RequestHandler = async (event) => { try { const db=getRequestDatabase(event); const plan=await createPlan(db, parseCreatePlanInput(await readJson(event.request))); await reconcilePlans(db); return json({ plan: await getPlan(db, plan.id) }, { status:201 }); } catch(error) { return jsonError(error); } };
+export const PATCH: RequestHandler = async (event) => { try { const db=getRequestDatabase(event); const plan=await updatePlan(db, parseUpdatePlanInput(await readJson(event.request))); await reconcilePlans(db); return json({ plan: await getPlan(db, plan.id) }); } catch(error) { return jsonError(error); } };
+export const DELETE: RequestHandler = async (event) => { try { await deletePlan(getRequestDatabase(event), parseDeletePlanInput(await readJson(event.request)).id); return json({ok:true}); } catch(error) { return jsonError(error); } };

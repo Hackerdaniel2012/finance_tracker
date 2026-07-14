@@ -11,10 +11,11 @@ import type { CategoryRule } from '../categories/types';
 import { matchesCategoryRule } from '../categories/matcher';
 import type { DbClient, DbRow, DbStatement } from '../db-client';
 import { generateRecurringSuggestions } from '../recurring/repository';
+import { reconcilePlans } from '../plans/matching';
 import { getDateRange, sha256Hex } from './shared';
+import { getExistingTransactionsByDedupeKey, partitionImportRows } from './deduplication';
 import type { ConfirmImportInput, ImportReport } from './types';
 
-const dedupeLookupChunkSize = 50;
 
 export async function confirmImport(
 	db: DbClient,
@@ -49,7 +50,12 @@ export async function confirmImport(
 	const { startDate, endDate } = getDateRange(parsed.rows.map((row) => row.bookingDate));
 	const batchId = crypto.randomUUID();
 	await assertNewFileHash(db, account.id, fileHash);
-	const insertableRows = await selectInsertableRows(db, account.id, parsed.rows);
+	const existingTransactions = await getExistingTransactionsByDedupeKey(
+		db,
+		account.id,
+		parsed.rows.map((row) => row.dedupeKey)
+	);
+	const insertableRows = partitionImportRows(parsed.rows, existingTransactions);
 	const rules = await listCategoryRules(db);
 	let unknownCount = 0;
 
@@ -63,7 +69,7 @@ export async function confirmImport(
 			endDate,
 			rowCount: parsed.rows.length,
 			importedCount: insertableRows.rows.length,
-			duplicateCount: insertableRows.duplicateCount,
+			duplicateCount: insertableRows.duplicates.length,
 			errorCount: parsed.errors.length
 		})
 	];
@@ -98,6 +104,7 @@ export async function confirmImport(
 	}
 
 	await runImportWriteBatch(db, writeStatements);
+	await reconcilePlans(db);
 	await generateRecurringSuggestions(db);
 
 	return {
@@ -109,7 +116,7 @@ export async function confirmImport(
 		endDate,
 		rowCount: parsed.rows.length,
 		importedCount: insertableRows.rows.length,
-		duplicateCount: insertableRows.duplicateCount,
+		duplicateCount: insertableRows.duplicates.length,
 		errorCount: parsed.errors.length,
 		unknownCount
 	};
@@ -143,64 +150,6 @@ async function assertNewFileHash(db: DbClient, accountId: string, fileHash: stri
 	}
 }
 
-async function selectInsertableRows(
-	db: DbClient,
-	accountId: string,
-	rows: NormalizedTransaction[]
-): Promise<{ rows: NormalizedTransaction[]; duplicateCount: number }> {
-	const existingKeys = await getExistingDedupeKeys(
-		db,
-		accountId,
-		rows.map((row) => row.dedupeKey)
-	);
-	const seenKeys = new Set<string>();
-	const insertableRows: NormalizedTransaction[] = [];
-	let duplicateCount = 0;
-
-	for (const row of rows) {
-		if (existingKeys.has(row.dedupeKey) || seenKeys.has(row.dedupeKey)) {
-			duplicateCount += 1;
-			continue;
-		}
-
-		seenKeys.add(row.dedupeKey);
-		insertableRows.push(row);
-	}
-
-	return { rows: insertableRows, duplicateCount };
-}
-
-async function getExistingDedupeKeys(
-	db: DbClient,
-	accountId: string,
-	dedupeKeys: string[]
-): Promise<Set<string>> {
-	const uniqueKeys = [...new Set(dedupeKeys)];
-	if (uniqueKeys.length === 0) {
-		return new Set();
-	}
-
-	const existingKeys = new Set<string>();
-	for (let index = 0; index < uniqueKeys.length; index += dedupeLookupChunkSize) {
-		const chunk = uniqueKeys.slice(index, index + dedupeLookupChunkSize);
-		const placeholders = chunk.map(() => '?').join(', ');
-		const { results } = await db
-			.prepare(
-				`SELECT dedupe_key
-				FROM transactions
-				WHERE account_id = ?
-					AND dedupe_key IN (${placeholders})`
-			)
-			.bind(accountId, ...chunk)
-			.all<DedupeRow>();
-
-		for (const row of results) {
-			existingKeys.add(row.dedupe_key);
-		}
-	}
-
-	return existingKeys;
-}
 
 function createBatchStatement(
 	db: DbClient,
@@ -324,9 +273,6 @@ function matchCategoryRule(
 	);
 }
 
-interface DedupeRow extends DbRow {
-	dedupe_key: string;
-}
 
 interface IdRow extends DbRow {
 	id: string;

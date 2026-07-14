@@ -144,7 +144,7 @@
 								{m.view_account()}
 							</a>
 							<button
-								class="rounded border border-red-200 px-3 py-2 text-sm font-medium text-red-700 disabled:opacity-50"
+								class="h-11 rounded border border-red-200 px-3 text-sm font-medium text-red-700 disabled:opacity-50"
 								type="button"
 								disabled={deletingAccountId === account.id}
 								onclick={() => deleteAccount(account)}
@@ -166,7 +166,7 @@
 					<span>{m.account_name()}</span>
 					<input class="w-full rounded border-zinc-300" bind:value={accountName} required />
 				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
+				<div class="grid gap-1 text-sm font-medium text-zinc-700">
 					<span>{m.institution()}</span>
 					<Picker
 						ariaLabel={m.institution()}
@@ -179,15 +179,11 @@
 						]}
 						bind:value={institutionChoice}
 					/>
-				</label>
+				</div>
 				{#if institutionChoice === 'other'}
 					<label class="grid gap-1 text-sm font-medium text-zinc-700">
 						<span>{m.institution_custom_name()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							bind:value={customInstitution}
-							required
-						/>
+						<input class="w-full rounded border-zinc-300" bind:value={customInstitution} required />
 					</label>
 				{/if}
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
@@ -199,7 +195,7 @@
 					/>
 				</label>
 				<button
-					class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+					class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 					type="submit"
 					disabled={isSaving}
 				>
@@ -207,6 +203,5 @@
 				</button>
 			</form>
 		</section>
-
 	</aside>
 </main>

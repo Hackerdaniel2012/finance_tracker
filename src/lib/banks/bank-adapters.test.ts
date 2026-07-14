@@ -186,7 +186,7 @@ describe('DKB adapter', () => {
 			amountCents: -4250,
 			currency: 'EUR',
 			payee: 'Example Market',
-			dedupeKey: 'synthetic-dkb-1',
+			dedupeKey: 'dkb_ref:synthetic-dkb-1|2026-07-01|2026-07-01|-4250',
 			source: {
 				bankId: 'dkb_girocard',
 				rowNumber: 5,
@@ -210,6 +210,20 @@ describe('DKB adapter', () => {
 		expect(result.errors).toEqual([]);
 		expect(result.rows.map((row) => row.amountCents)).toEqual([12345, -12345]);
 		expect(result.rows.map((row) => row.payee)).toEqual(['Employer', 'Shop']);
+	});
+
+	it('keeps DKB transactions with the same Kundenreferenz but different postings distinct', () => {
+		const csv = [
+			'"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"',
+			'"26.01.26";"26.01.26";"Gebucht";"Me";"PayPal Europe";"1047796546992/ADD TO BALANCE";"Ausgang";"LU89";"2,18";"";"";"1047796546992"',
+			'"27.01.26";"26.01.26";"Gebucht";"Me";"PayPal Europe";"1047796546992/ADD TO BALANCE";"Eingang";"DE96";"2,18";"";"";"1047796546992"'
+		].join('\n');
+
+		const result = dkbAdapter.parse(csv);
+
+		expect(result.errors).toEqual([]);
+		expect(result.rows.map((row) => row.amountCents)).toEqual([-218, 218]);
+		expect(new Set(result.rows.map((row) => row.dedupeKey))).toHaveLength(2);
 	});
 
 	it('falls back to a fingerprint when Kundenreferenz is empty', () => {
@@ -266,7 +280,28 @@ describe('DKB credit card adapter', () => {
 			originalCurrency: 'USD',
 			payee: 'Example Software'
 		});
-		expect(result.rows[1]?.dedupeKey).toMatch(/^fp_[0-9a-f]{8}$/);
+		expect(result.rows[1]?.dedupeKey).toMatch(/^fp_[0-9a-f]{8}:1$/);
+	});
+
+	it('keeps repeated DKB credit card charges with identical visible fields distinct', () => {
+		const csv = [
+			'"Belegdatum";"Wertstellung";"Status";"Beschreibung";"Umsatztyp";"Betrag (€)";"Fremdwährungsbetrag"',
+			'"23.03.26";"24.03.26";"Gebucht";"ANTHROPIC";"Onlinezahlung";"-5,95";""',
+			'"23.03.26";"24.03.26";"Gebucht";"ANTHROPIC";"Onlinezahlung";"-5,95";""',
+			'"22.03.26";"23.03.26";"Gebucht";"ANTHROPIC";"Onlinezahlung";"-5,95";""',
+			'"22.03.26";"23.03.26";"Gebucht";"ANTHROPIC";"Onlinezahlung";"-5,95";""'
+		].join('\n');
+
+		const result = dkbCreditcardAdapter.parse(csv);
+
+		expect(result.errors).toEqual([]);
+		expect(result.rows.map((row) => row.dedupeKey)).toEqual([
+			expect.stringMatching(/^fp_[0-9a-f]{8}:1$/),
+			expect.stringMatching(/^fp_[0-9a-f]{8}:2$/),
+			expect.stringMatching(/^fp_[0-9a-f]{8}:1$/),
+			expect.stringMatching(/^fp_[0-9a-f]{8}:2$/)
+		]);
+		expect(new Set(result.rows.map((row) => row.dedupeKey))).toHaveLength(4);
 	});
 
 	it('requires the credit card headers and validates dates, amounts, and status', () => {

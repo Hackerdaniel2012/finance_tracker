@@ -27,7 +27,7 @@ export function applySql(db: Database, sql: string): void {
 	db.run(sql);
 }
 
-export async function applyMigrations(db: Database): Promise<void> {
+export async function applyMigrations(db: Database, through?: string): Promise<void> {
 	const migrationFiles = [
 		'0001_initial_schema.sql',
 		'0002_seed_default_categories.sql',
@@ -37,10 +37,26 @@ export async function applyMigrations(db: Database): Promise<void> {
 		'0006_add_recurring_labels.sql',
 		'0007_add_dkb_creditcard_scheme.sql',
 		'0008_rename_dkb_girocard_remove_profile_label.sql',
-		'0009_remove_import_profiles.sql'
+		'0009_remove_import_profiles.sql',
+		'0010_fix_dkb_reference_deduplication.sql',
+		'0011_preserve_repeated_dkb_creditcard_charges.sql',
+		'0012_add_daily_recurring_cadence.sql',
+		'0013_add_recurring_end_date.sql',
+		'0014_seed_vehicles_category.sql',
+		'0015_seed_development_category.sql',
+		'0016_unify_plans.sql',
+		'0017_replace_subscriptions_with_repayments.sql',
+		'0018_rename_repayments_to_installment_plan.sql',
+		'0019_add_liability_interest.sql',
+		'0020_add_telecommunications_category.sql',
+		'0021_add_shopping_category.sql',
+		'0022_add_plan_match_ledger.sql',
+		'0023_repair_plan_migration_duplicates.sql',
+		'0024_add_liability_balance_baselines.sql'
 	];
 	for (const file of migrationFiles) {
 		applySql(db, await readFile(resolve('migrations', file), 'utf8'));
+		if (file === through) break;
 	}
 }
 

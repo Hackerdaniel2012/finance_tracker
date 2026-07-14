@@ -1,8 +1,8 @@
 import { ValidationError } from '../accounts/errors';
+import { requireIsoDate } from '../date-validation';
 import type { CreateLiabilityInput, LiabilityStatus, UpdateLiabilityInput } from './types';
 
 const statuses = new Set<LiabilityStatus>(['active', 'cleared']);
-const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseCreateLiabilityInput(value: unknown): CreateLiabilityInput {
 	const body = asObject(value);
@@ -11,7 +11,11 @@ export function parseCreateLiabilityInput(value: unknown): CreateLiabilityInput 
 		accountId: optionalNullableString(body.accountId, 'accountId'),
 		name: requiredString(body.name, 'name'),
 		amountCents: requiredPositiveInteger(body.amountCents, 'amountCents'),
-		asOfDate: requiredDate(body.asOfDate, 'asOfDate'),
+		asOfDate: requireIsoDate(body.asOfDate, 'asOfDate'),
+		annualInterestRateBps: optionalNullableNonNegativeInteger(
+			body.annualInterestRateBps,
+			'annualInterestRateBps'
+		),
 		status: optionalStatus(body.status) ?? 'active',
 		note: optionalNullableString(body.note, 'note')
 	};
@@ -36,7 +40,13 @@ export function parseUpdateLiabilityInput(value: unknown): UpdateLiabilityInput 
 	}
 
 	if ('asOfDate' in body) {
-		input.asOfDate = requiredDate(body.asOfDate, 'asOfDate');
+		input.asOfDate = requireIsoDate(body.asOfDate, 'asOfDate');
+	}
+	if ('annualInterestRateBps' in body) {
+		input.annualInterestRateBps = optionalNullableNonNegativeInteger(
+			body.annualInterestRateBps,
+			'annualInterestRateBps'
+		);
 	}
 
 	if ('status' in body) {
@@ -49,6 +59,9 @@ export function parseUpdateLiabilityInput(value: unknown): UpdateLiabilityInput 
 
 	if (Object.keys(input).length === 1) {
 		throw new ValidationError('At least one liability field must be updated');
+	}
+	if ((input.amountCents === undefined) !== (input.asOfDate === undefined)) {
+		throw new ValidationError('amountCents and asOfDate must be updated together');
 	}
 
 	return input;
@@ -102,13 +115,16 @@ function requiredPositiveInteger(value: unknown, field: string): number {
 	return value;
 }
 
-function requiredDate(value: unknown, field: string): string {
-	const date = requiredString(value, field);
-	if (!isoDatePattern.test(date)) {
-		throw new ValidationError(`${field} must be an ISO date`);
+function optionalNullableNonNegativeInteger(
+	value: unknown,
+	field: string
+): number | null | undefined {
+	if (value === undefined) return undefined;
+	if (value === null || value === '') return null;
+	if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+		throw new ValidationError(`${field} must be a non-negative integer or null`);
 	}
-
-	return date;
+	return value;
 }
 
 function optionalStatus(value: unknown): LiabilityStatus | undefined {

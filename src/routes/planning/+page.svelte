@@ -1,1738 +1,1239 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
 	import { fetchJsonWithRetry } from '$lib/fetch-json';
+	import { summarizePlans } from '$lib/planning-summary';
+	import Picker from '$lib/components/Picker.svelte';
+	import DatePicker from '$lib/components/DatePicker.svelte';
 	import { onMount } from 'svelte';
-
-	type ContractKind = 'fixed_cost' | 'subscription' | 'salary' | 'income' | 'other';
-	type ContractCadence = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
-	type ContractStatus = 'active' | 'paused' | 'ended';
-	type PlannedPaymentStatus = 'planned' | 'paid' | 'cancelled';
-	type PlannedIncomeStatus = 'planned' | 'received' | 'cancelled';
-	type RecurringStatus = 'suggested' | 'confirmed' | 'ignored';
-	type LiabilityStatus = 'active' | 'cleared';
-
+	type Direction = 'expense' | 'income';
+	type Cadence = 'once' | 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
+	type Status = 'active' | 'paused' | 'done' | 'cancelled';
 	interface Account {
 		id: string;
 		name: string;
-		institution: string | null;
 	}
-
 	interface Category {
 		id: string;
 		name: string;
 		type: string;
 	}
-
-	interface Contract {
-		id: string;
-		accountId: string | null;
-		accountName: string | null;
-		categoryId: string | null;
-		categoryName: string | null;
-		name: string;
-		payee: string | null;
-		kind: ContractKind;
-		cadence: ContractCadence;
-		expectedAmountCents: number;
-		nextDate: string;
-		endDate: string | null;
-		status: ContractStatus;
-		source: string;
-	}
-
-	interface PlannedPayment {
+	interface Plan {
 		id: string;
 		accountId: string | null;
 		accountName: string | null;
 		categoryId: string | null;
 		categoryName: string | null;
 		label: string | null;
-		payee: string;
+		counterparty: string | null;
+		direction: Direction;
+		cadence: Cadence;
 		amountCents: number;
-		dueDate: string;
-		status: PlannedPaymentStatus;
+		nextDate: string;
+		endDate: string | null;
+		status: Status;
 		note: string | null;
+		transactionCount: number;
+		lastTransactionDate: string | null;
+		scheduleAnchorDate: string;
+		scheduleOccurrenceIndex: number;
+		liabilityId: string | null;
 	}
-
-	interface PlannedIncome {
-		id: string;
-		accountId: string | null;
-		accountName: string | null;
-		categoryId: string | null;
-		categoryName: string | null;
-		payer: string;
-		amountCents: number;
-		dueDate: string;
-		status: PlannedIncomeStatus;
-		note: string | null;
-	}
-
-	interface Liability {
-		id: string;
-		accountId: string | null;
-		accountName: string | null;
-		name: string;
-		amountCents: number;
-		asOfDate: string;
-		status: LiabilityStatus;
-		note: string | null;
-	}
-
 	interface RecurringGroup {
 		id: string;
+		accountId: string | null;
 		accountName: string | null;
 		categoryId: string | null;
 		categoryName: string | null;
 		label: string | null;
 		payee: string;
 		direction: 'incoming' | 'outgoing' | null;
-		cadence: ContractCadence;
+		cadence: Exclude<Cadence, 'once'>;
 		expectedAmountCents: number;
 		nextDate: string | null;
-		status: RecurringStatus;
+		endDate: string | null;
+		status: 'suggested' | 'confirmed' | 'ignored';
 		confidence: number;
 		confidenceFactors: { interval: number; amount: number; history: number; recency: number };
-		needsReview: boolean;
-		transactionCount: number;
 		evidence: Array<{
 			transactionId: string;
 			bookingDate: string;
 			amountCents: number;
 			payee: string | null;
+			description: string | null;
 		}>;
 	}
-
-	interface UpcomingPayment {
+	interface Liability {
 		id: string;
 		accountName: string | null;
-		categoryName: string | null;
-		payee: string;
+		name: string;
 		amountCents: number;
-		dueDate: string;
+		asOfDate: string;
+		annualInterestRateBps: number | null;
+		status: 'active' | 'cleared';
 		note: string | null;
+		plan: {
+			id: string;
+			label: string | null;
+			counterparty: string | null;
+			categoryName: string | null;
+			cadence: Cadence;
+			amountCents: number;
+			nextDate: string;
+			endDate: string | null;
+			status: Status;
+		} | null;
+		projection: {
+			nextInterestCents: number;
+			nextPrincipalCents: number;
+			estimatedRemainingPayments: number | null;
+			estimatedPayoffDate: string | null;
+			estimatedRemainingInterestCents: number | null;
+		} | null;
 	}
-
-	interface UpcomingIncome {
-		id: string;
-		accountName: string | null;
-		categoryName: string | null;
-		payer: string;
-		amountCents: number;
-		dueDate: string;
-		note: string | null;
+	let accounts = $state<Account[]>([]),
+		categories = $state<Category[]>([]),
+		plans = $state<Plan[]>([]),
+		suggestions = $state<RecurringGroup[]>([]),
+		liabilities = $state<Liability[]>([]),
+		loading = $state(true),
+		error = $state(''),
+		editingId = $state<string | null>(null);
+	let form = $state(blankPlan());
+	let editForm = $state(blankPlan());
+	let editError = $state('');
+	let selectedSuggestionId = $state<string | null>(null);
+	let suggestionError = $state('');
+	let suggestionForms = $state<
+		Record<
+			string,
+			{
+				categoryId: string;
+				label: string;
+				cadence: Exclude<Cadence, 'once'>;
+				amount: string;
+				nextDate: string;
+				endDate: string;
+				indefinite: boolean;
+				direction: Direction;
+				createLiability: boolean;
+				liabilityName: string;
+				liabilityAmount: string;
+				liabilityAsOfDate: string;
+				liabilityInterestRate: string;
+			}
+		>
+	>({});
+	const cadenceOptions = $derived([
+		{ value: 'once', label: m.plan_once() },
+		{ value: 'daily', label: m.plan_daily() },
+		{ value: 'weekly', label: m.plan_weekly() },
+		{ value: 'biweekly', label: m.plan_biweekly() },
+		{ value: 'monthly', label: m.plan_monthly() },
+		{ value: 'quarterly', label: m.plan_quarterly() },
+		{ value: 'yearly', label: m.plan_yearly() }
+	]);
+	const directionOptions = $derived([
+		{ value: 'expense', label: m.expenses() },
+		{ value: 'income', label: m.income() }
+	]);
+	const categoryOptions = $derived([
+		{ value: '', label: m.no_category() },
+		...categories.map((c) => ({ value: c.id, label: c.name }))
+	]);
+	const accountOptions = $derived([
+		{ value: '', label: m.all_accounts() },
+		...accounts.map((a) => ({ value: a.id, label: a.name }))
+	]);
+	const expenseSummary = $derived(summarizePlans(plans, 'expense', today()));
+	const incomeSummary = $derived(summarizePlans(plans, 'income', today()));
+	const editingPlan = $derived(plans.find((plan) => plan.id === editingId) ?? null);
+	function blankPlan() {
+		return {
+			counterparty: '',
+			label: '',
+			direction: 'expense' as Direction,
+			cadence: 'once' as Cadence,
+			amount: '',
+			nextDate: today(),
+			endDate: '',
+			indefinite: true,
+			accountId: '',
+			categoryId: '',
+			status: 'active' as Status,
+			note: '',
+			createLiability: false,
+			liabilityName: '',
+			liabilityAmount: '',
+			liabilityAsOfDate: today(),
+			liabilityInterestRate: ''
+		};
 	}
-
-	interface BalanceProjection {
-		asOf: string;
-		projectionDate: string;
-		manualNextSalaryDate: string | null;
-		nextIncome: UpcomingIncome | null;
-		currentBalanceCents: number;
-		upcomingPaymentCents: number;
-		projectedBalanceCents: number;
-		upcomingPayments: UpcomingPayment[];
-	}
-
-	const contractKinds: ContractKind[] = ['fixed_cost', 'subscription', 'salary', 'income', 'other'];
-	const cadences: ContractCadence[] = ['weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'];
-	const contractStatuses: ContractStatus[] = ['active', 'paused', 'ended'];
-	const paymentStatuses: PlannedPaymentStatus[] = ['planned', 'paid', 'cancelled'];
-	const incomeStatuses: PlannedIncomeStatus[] = ['planned', 'received', 'cancelled'];
-	const liabilityStatuses: LiabilityStatus[] = ['active', 'cleared'];
-
-	let accounts = $state<Account[]>([]);
-	let categories = $state<Category[]>([]);
-	let contracts = $state<Contract[]>([]);
-	let plannedPayments = $state<PlannedPayment[]>([]);
-	let plannedIncome = $state<PlannedIncome[]>([]);
-	let liabilities = $state<Liability[]>([]);
-	let recurringGroups = $state<RecurringGroup[]>([]);
-	let selectedRecurring = $state<RecurringGroup | null>(null);
-	let recurringDirection = $state<'incoming' | 'outgoing'>('outgoing');
-	let recurringCategoryId = $state('');
-	let recurringLabel = $state('');
-	let recurringCadence = $state<ContractCadence>('monthly');
-	let recurringAmount = $state('');
-	let recurringNextDate = $state(todayIso());
-	let upcomingPayments = $state<UpcomingPayment[]>([]);
-	let upcomingIncome = $state<UpcomingIncome[]>([]);
-	let projection = $state<BalanceProjection | null>(null);
-	let status = $state(m.planning_status_loading());
-	let error = $state<string | null>(null);
-	let isSavingContract = $state(false);
-	let isSavingPayment = $state(false);
-	let isSavingIncome = $state(false);
-	let isSavingLiability = $state(false);
-	let isUpdatingRecurring = $state(false);
-	let editingContractId = $state<string | null>(null);
-	let editContractName = $state('');
-	let editContractPayee = $state('');
-	let editContractKind = $state<ContractKind>('fixed_cost');
-	let editContractCadence = $state<ContractCadence>('monthly');
-	let editContractAmount = $state('');
-	let editContractNextDate = $state(todayIso());
-	let editContractEndDate = $state('');
-	let editContractStatus = $state<ContractStatus>('active');
-	let editContractAccountId = $state('');
-	let editContractCategoryId = $state('');
-	let editingPaymentId = $state<string | null>(null);
-	let editPaymentPayee = $state('');
-	let editPaymentAmount = $state('');
-	let editPaymentDueDate = $state(todayIso());
-	let editPaymentStatus = $state<PlannedPaymentStatus>('planned');
-	let editPaymentAccountId = $state('');
-	let editPaymentCategoryId = $state('');
-	let editPaymentNote = $state('');
-	let editingIncomeId = $state<string | null>(null);
-	let editIncomePayer = $state('');
-	let editIncomeAmount = $state('');
-	let editIncomeDueDate = $state(todayIso());
-	let editIncomeStatus = $state<PlannedIncomeStatus>('planned');
-	let editIncomeAccountId = $state('');
-	let editIncomeCategoryId = $state('');
-	let editIncomeNote = $state('');
-
-	let contractName = $state('');
-	let contractPayee = $state('');
-	let contractKind = $state<ContractKind>('fixed_cost');
-	let contractCadence = $state<ContractCadence>('monthly');
-	let contractAmount = $state('');
-	let contractNextDate = $state(todayIso());
-	let contractEndDate = $state('');
-	let contractStatus = $state<ContractStatus>('active');
-	let contractAccountId = $state('');
-	let contractCategoryId = $state('');
-
-	let paymentPayee = $state('');
-	let paymentAmount = $state('');
-	let paymentDueDate = $state(todayIso());
-	let paymentStatus = $state<PlannedPaymentStatus>('planned');
-	let paymentAccountId = $state('');
-	let paymentCategoryId = $state('');
-	let paymentNote = $state('');
-
-	let incomePayer = $state('');
-	let incomeAmount = $state('');
-	let incomeDueDate = $state(todayIso());
-	let incomeStatus = $state<PlannedIncomeStatus>('planned');
-	let incomeAccountId = $state('');
-	let incomeCategoryId = $state('');
-	let incomeNote = $state('');
-
-	let liabilityName = $state('');
-	let liabilityAmount = $state('');
-	let liabilityAsOfDate = $state(todayIso());
-	let liabilityStatus = $state<LiabilityStatus>('active');
-	let liabilityAccountId = $state('');
-	let liabilityNote = $state('');
-	let manualNextSalaryDate = $state('');
-
-	const upcomingPaymentTotal = $derived(
-		upcomingPayments.reduce((sum, payment) => sum + payment.amountCents, 0)
-	);
-	const upcomingIncomeTotal = $derived(
-		upcomingIncome.reduce((sum, income) => sum + income.amountCents, 0)
-	);
-	const activeLiabilityTotal = $derived(
-		liabilities
-			.filter((liability) => liability.status === 'active')
-			.reduce((sum, liability) => sum + liability.amountCents, 0)
-	);
-
-	onMount(() => {
-		void loadPlanningState();
-	});
-
-	async function loadPlanningState() {
-		status = m.planning_status_loading();
-		error = null;
-
-		try {
-			const [
-				accountPayload,
-				categoryPayload,
-				contractPayload,
-				paymentPayload,
-				incomePayload,
-				liabilityPayload,
-				recurringPayload,
-				upcomingPaymentPayload,
-				upcomingIncomePayload,
-				projectionPayload
-			] = await Promise.all([
-				fetchJson<{ accounts: Account[] }>('/api/accounts'),
-				fetchJson<{ categories: Category[] }>('/api/categories'),
-				fetchJson<{ contracts: Contract[] }>('/api/contracts'),
-				fetchJson<{ plannedPayments: PlannedPayment[] }>('/api/planned-payments'),
-				fetchJson<{ plannedIncome: PlannedIncome[] }>('/api/planned-income'),
-				fetchJson<{ liabilities: Liability[] }>('/api/liabilities'),
-				fetchJson<{ recurringGroups: RecurringGroup[] }>('/api/recurring'),
-				fetchJson<{ upcomingPayments: UpcomingPayment[] }>('/api/upcoming-payments'),
-				fetchJson<{ upcomingIncome: UpcomingIncome[] }>('/api/upcoming-income'),
-				fetchJson<{ projection: BalanceProjection }>(balanceBeforeSalaryUrl())
-			]);
-
-			accounts = accountPayload.accounts;
-			categories = categoryPayload.categories;
-			contracts = contractPayload.contracts;
-			plannedPayments = paymentPayload.plannedPayments;
-			plannedIncome = incomePayload.plannedIncome;
-			liabilities = liabilityPayload.liabilities;
-			recurringGroups = recurringPayload.recurringGroups;
-			upcomingPayments = upcomingPaymentPayload.upcomingPayments;
-			upcomingIncome = upcomingIncomePayload.upcomingIncome;
-			projection = projectionPayload.projection;
-			status = m.planning_status_ready();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		}
-	}
-
-	async function createContract(event: SubmitEvent) {
-		event.preventDefault();
-		isSavingContract = true;
-		error = null;
-
-		try {
-			await fetchJson<{ contract: Contract }>('/api/contracts', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					accountId: contractAccountId || null,
-					categoryId: contractCategoryId || null,
-					name: contractName,
-					payee: contractPayee || null,
-					kind: contractKind,
-					cadence: contractCadence,
-					expectedAmountCents: eurosToCents(contractAmount),
-					nextDate: contractNextDate,
-					endDate: contractEndDate || null,
-					status: contractStatus,
-					source: 'manual'
-				})
-			});
-
-			contractName = '';
-			contractPayee = '';
-			contractAmount = '';
-			contractEndDate = '';
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		} finally {
-			isSavingContract = false;
-		}
-	}
-
-	async function updateContractStatus(contract: Contract, nextStatus: ContractStatus) {
-		await patchAndReload('/api/contracts', { id: contract.id, status: nextStatus });
-	}
-
-	function startContractEdit(contract: Contract) {
-		editingContractId = contract.id;
-		editContractName = contract.name;
-		editContractPayee = contract.payee ?? '';
-		editContractKind = contract.kind;
-		editContractCadence = contract.cadence;
-		editContractAmount = (contract.expectedAmountCents / 100).toFixed(2);
-		editContractNextDate = contract.nextDate;
-		editContractEndDate = contract.endDate ?? '';
-		editContractStatus = contract.status;
-		editContractAccountId = contract.accountId ?? '';
-		editContractCategoryId = contract.categoryId ?? '';
-	}
-
-	function cancelContractEdit() {
-		editingContractId = null;
-	}
-
-	async function saveContract(event: SubmitEvent, contractId: string) {
-		event.preventDefault();
-		error = null;
-
-		try {
-			await fetchJson<{ contract: Contract }>('/api/contracts', {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					id: contractId,
-					accountId: editContractAccountId || null,
-					categoryId: editContractCategoryId || null,
-					name: editContractName,
-					payee: editContractPayee || null,
-					kind: editContractKind,
-					cadence: editContractCadence,
-					expectedAmountCents: eurosToCents(editContractAmount),
-					nextDate: editContractNextDate,
-					endDate: editContractEndDate || null,
-					status: editContractStatus
-				})
-			});
-			editingContractId = null;
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		}
-	}
-
-	async function createPayment(event: SubmitEvent) {
-		event.preventDefault();
-		isSavingPayment = true;
-		error = null;
-
-		try {
-			await fetchJson<{ plannedPayment: PlannedPayment }>('/api/planned-payments', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					accountId: paymentAccountId || null,
-					categoryId: paymentCategoryId || null,
-					payee: paymentPayee,
-					amountCents: eurosToCents(paymentAmount),
-					dueDate: paymentDueDate,
-					status: paymentStatus,
-					note: paymentNote || null
-				})
-			});
-
-			paymentPayee = '';
-			paymentAmount = '';
-			paymentNote = '';
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		} finally {
-			isSavingPayment = false;
-		}
-	}
-
-	async function updatePaymentStatus(payment: PlannedPayment, nextStatus: PlannedPaymentStatus) {
-		await patchAndReload('/api/planned-payments', { id: payment.id, status: nextStatus });
-	}
-
-	function startPaymentEdit(payment: PlannedPayment) {
-		editingPaymentId = payment.id;
-		editPaymentPayee = payment.payee;
-		editPaymentAmount = (payment.amountCents / 100).toFixed(2);
-		editPaymentDueDate = payment.dueDate;
-		editPaymentStatus = payment.status;
-		editPaymentAccountId = payment.accountId ?? '';
-		editPaymentCategoryId = payment.categoryId ?? '';
-		editPaymentNote = payment.note ?? '';
-	}
-
-	function cancelPaymentEdit() {
-		editingPaymentId = null;
-	}
-
-	async function savePayment(event: SubmitEvent, paymentId: string) {
-		event.preventDefault();
-		error = null;
-
-		try {
-			await fetchJson<{ plannedPayment: PlannedPayment }>('/api/planned-payments', {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					id: paymentId,
-					accountId: editPaymentAccountId || null,
-					categoryId: editPaymentCategoryId || null,
-					payee: editPaymentPayee,
-					amountCents: eurosToCents(editPaymentAmount),
-					dueDate: editPaymentDueDate,
-					status: editPaymentStatus,
-					note: editPaymentNote || null
-				})
-			});
-			editingPaymentId = null;
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		}
-	}
-
-	async function createIncome(event: SubmitEvent) {
-		event.preventDefault();
-		isSavingIncome = true;
-		error = null;
-
-		try {
-			await fetchJson<{ plannedIncome: PlannedIncome }>('/api/planned-income', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					accountId: incomeAccountId || null,
-					categoryId: incomeCategoryId || null,
-					payer: incomePayer,
-					amountCents: eurosToCents(incomeAmount),
-					dueDate: incomeDueDate,
-					status: incomeStatus,
-					note: incomeNote || null
-				})
-			});
-
-			incomePayer = '';
-			incomeAmount = '';
-			incomeNote = '';
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		} finally {
-			isSavingIncome = false;
-		}
-	}
-
-	async function updateIncomeStatus(income: PlannedIncome, nextStatus: PlannedIncomeStatus) {
-		await patchAndReload('/api/planned-income', { id: income.id, status: nextStatus });
-	}
-
-	function startIncomeEdit(income: PlannedIncome) {
-		editingIncomeId = income.id;
-		editIncomePayer = income.payer;
-		editIncomeAmount = (income.amountCents / 100).toFixed(2);
-		editIncomeDueDate = income.dueDate;
-		editIncomeStatus = income.status;
-		editIncomeAccountId = income.accountId ?? '';
-		editIncomeCategoryId = income.categoryId ?? '';
-		editIncomeNote = income.note ?? '';
-	}
-
-	function cancelIncomeEdit() {
-		editingIncomeId = null;
-	}
-
-	async function saveIncome(event: SubmitEvent, incomeId: string) {
-		event.preventDefault();
-		error = null;
-
-		try {
-			await fetchJson<{ plannedIncome: PlannedIncome }>('/api/planned-income', {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					id: incomeId,
-					accountId: editIncomeAccountId || null,
-					categoryId: editIncomeCategoryId || null,
-					payer: editIncomePayer,
-					amountCents: eurosToCents(editIncomeAmount),
-					dueDate: editIncomeDueDate,
-					status: editIncomeStatus,
-					note: editIncomeNote || null
-				})
-			});
-			editingIncomeId = null;
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		}
-	}
-
-	async function createLiability(event: SubmitEvent) {
-		event.preventDefault();
-		isSavingLiability = true;
-		error = null;
-
-		try {
-			await fetchJson<{ liability: Liability }>('/api/liabilities', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					accountId: liabilityAccountId || null,
-					name: liabilityName,
-					amountCents: eurosToCents(liabilityAmount),
-					asOfDate: liabilityAsOfDate,
-					status: liabilityStatus,
-					note: liabilityNote || null
-				})
-			});
-
-			liabilityName = '';
-			liabilityAmount = '';
-			liabilityNote = '';
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		} finally {
-			isSavingLiability = false;
-		}
-	}
-
-	async function applyManualNextSalaryDate(event: SubmitEvent) {
-		event.preventDefault();
-		await loadPlanningState();
-	}
-
-	async function updateLiabilityStatus(liability: Liability, nextStatus: LiabilityStatus) {
-		await patchAndReload('/api/liabilities', { id: liability.id, status: nextStatus });
-	}
-
-	async function deleteLiability(liability: Liability) {
-		error = null;
-		try {
-			await fetchJson('/api/liabilities', {
-				method: 'DELETE',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ id: liability.id })
-			});
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		}
-	}
-
-	async function updateRecurringStatus(group: RecurringGroup, nextStatus: RecurringStatus) {
-		isUpdatingRecurring = true;
-		try {
-			await fetchJson<{ recurringGroup: RecurringGroup }>(`/api/recurring/${group.id}`, {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ status: nextStatus })
-			});
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		} finally {
-			isUpdatingRecurring = false;
-		}
-	}
-
-	async function refreshRecurringSuggestions() {
-		isUpdatingRecurring = true;
-		try {
-			await fetchJson('/api/recurring', { method: 'POST' });
-			await loadPlanningState();
-		} catch {
-			error = m.planning_status_error();
-		} finally {
-			isUpdatingRecurring = false;
-		}
-	}
-
-	function reviewRecurring(group: RecurringGroup) {
-		selectedRecurring = group;
-		recurringDirection = group.direction ?? 'outgoing';
-		recurringCategoryId = group.categoryId ?? '';
-		recurringLabel = group.label ?? '';
-		recurringCadence = group.cadence;
-		recurringAmount = String(group.expectedAmountCents / 100);
-		recurringNextDate = group.nextDate ?? todayIso();
-	}
-
-	async function confirmRecurring(event: SubmitEvent) {
-		event.preventDefault();
-		if (!selectedRecurring || !recurringCategoryId) return;
-		isUpdatingRecurring = true;
-		try {
-			await fetchJson(`/api/recurring/${selectedRecurring.id}`, {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					status: 'confirmed',
-					direction: recurringDirection,
-					categoryId: recurringCategoryId,
-					label: recurringLabel || null,
-					cadence: recurringCadence,
-					expectedAmountCents: eurosToCents(recurringAmount),
-					nextDate: recurringNextDate
-				})
-			});
-			selectedRecurring = null;
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			error = m.planning_status_error();
-		} finally {
-			isUpdatingRecurring = false;
-		}
-	}
-
-	async function patchAndReload(url: string, body: Record<string, string>) {
-		error = null;
-		try {
-			await fetchJson(url, {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(body)
-			});
-			status = m.planning_status_saved();
-			await loadPlanningState();
-		} catch {
-			status = m.planning_status_error();
-			error = m.planning_status_error();
-		}
-	}
-
-	async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
-		return fetchJsonWithRetry<T>(url, init);
-	}
-
-	function balanceBeforeSalaryUrl(): string {
-		if (manualNextSalaryDate) {
-			return `/api/balance-before-salary?nextSalaryDate=${encodeURIComponent(manualNextSalaryDate)}`;
-		}
-
-		return '/api/balance-before-salary';
-	}
-
-	function todayIso(): string {
+	function today() {
 		return new Date().toISOString().slice(0, 10);
 	}
-
-	function eurosToCents(value: string): number {
+	function euros(c: number) {
+		return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(c / 100);
+	}
+	function cents(value: string) {
 		return Math.round(Number(value.replace(',', '.')) * 100);
 	}
-
-	function centsToEuros(value: number): string {
-		return (value / 100).toLocaleString(undefined, {
-			style: 'currency',
-			currency: 'EUR'
-		});
+	function rateBps(value: string) {
+		return Math.round(Number(value.replace(',', '.')) * 100);
 	}
-
+	function cadenceLabel(value: Cadence): string {
+		return {
+			once: m.plan_once,
+			daily: m.plan_daily,
+			weekly: m.plan_weekly,
+			biweekly: m.plan_biweekly,
+			monthly: m.plan_monthly,
+			quarterly: m.plan_quarterly,
+			yearly: m.plan_yearly
+		}[value]();
+	}
+	function statusLabel(value: Status): string {
+		return {
+			active: m.status_active,
+			paused: m.status_paused,
+			done: m.status_done,
+			cancelled: m.status_cancelled
+		}[value]();
+	}
+	function liabilityStatusLabel(value: Liability['status']): string {
+		return value === 'active' ? m.status_active() : m.status_cleared();
+	}
 	function formatDate(value: string | null): string {
-		if (!value) return m.not_available();
-		return new Date(`${value}T00:00:00`).toLocaleDateString();
+		return value
+			? new Intl.DateTimeFormat('en-US', {
+					year: 'numeric',
+					month: 'numeric',
+					day: 'numeric',
+					timeZone: 'UTC'
+				}).format(new Date(`${value}T00:00:00Z`))
+			: '—';
 	}
-
-	function kindLabel(value: ContractKind): string {
-		return {
-			fixed_cost: m.contract_kind_fixed_cost(),
-			subscription: m.contract_kind_subscription(),
-			salary: m.contract_kind_salary(),
-			income: m.contract_kind_income(),
-			other: m.contract_kind_other()
-		}[value];
+	function isSettledThisMonth(plan: Plan): boolean {
+		if (!plan.lastTransactionDate || plan.lastTransactionDate.slice(0, 7) !== today().slice(0, 7))
+			return false;
+		if (plan.status === 'done') return true;
+		const now = new Date(`${today()}T00:00:00Z`);
+		const monthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))
+			.toISOString()
+			.slice(0, 10);
+		return plan.nextDate > monthEnd;
 	}
-
-	function cadenceLabel(value: ContractCadence): string {
-		return {
-			weekly: m.cadence_weekly(),
-			biweekly: m.cadence_biweekly(),
-			monthly: m.cadence_monthly(),
-			quarterly: m.cadence_quarterly(),
-			yearly: m.cadence_yearly()
-		}[value];
+	async function load() {
+		loading = true;
+		error = '';
+		const results = await Promise.allSettled([
+			fetchJsonWithRetry<{ accounts: Account[] }>('/api/accounts'),
+			fetchJsonWithRetry<{ categories: Category[] }>('/api/categories'),
+			fetchJsonWithRetry<{ plans: Plan[] }>('/api/plans'),
+			fetchJsonWithRetry<{ recurringGroups: RecurringGroup[] }>('/api/recurring', {
+				cache: 'no-store'
+			}),
+			fetchJsonWithRetry<{ liabilities: Liability[] }>('/api/liabilities')
+		]);
+		if (results[0].status === 'fulfilled') accounts = results[0].value.accounts;
+		if (results[1].status === 'fulfilled') categories = results[1].value.categories;
+		if (results[2].status === 'fulfilled') plans = results[2].value.plans;
+		if (results[3].status === 'fulfilled') {
+			suggestions = results[3].value.recurringGroups.filter(
+				(group) => group.status === 'suggested'
+			);
+			suggestionForms = Object.fromEntries(
+				suggestions.map((group) => [
+					group.id,
+					{
+						categoryId: group.categoryId ?? '',
+						label: group.label ?? '',
+						cadence: group.cadence,
+						amount: String(group.expectedAmountCents / 100),
+						nextDate: group.nextDate ?? today(),
+						endDate: group.endDate ?? '',
+						indefinite: !group.endDate,
+						direction:
+							group.direction === 'incoming' ? ('income' as Direction) : ('expense' as Direction),
+						createLiability: false,
+						liabilityName: group.label || group.payee,
+						liabilityAmount: '',
+						liabilityAsOfDate: today(),
+						liabilityInterestRate: ''
+					}
+				])
+			);
+		}
+		if (results[4].status === 'fulfilled') liabilities = results[4].value.liabilities;
+		const failure = results.find((result) => result.status === 'rejected');
+		if (failure?.status === 'rejected')
+			error = failure.reason instanceof Error ? failure.reason.message : m.planning_status_error();
+		loading = false;
 	}
-
-	function contractStatusLabel(value: ContractStatus): string {
-		return {
-			active: m.status_active(),
-			paused: m.status_paused(),
-			ended: m.status_ended()
-		}[value];
+	onMount(() => {
+		void load();
+	});
+	function visible(direction: Direction) {
+		return plans.filter((plan) => plan.direction === direction);
 	}
-
-	function paymentStatusLabel(value: PlannedPaymentStatus): string {
-		return {
-			planned: m.status_planned(),
-			paid: m.status_paid(),
-			cancelled: m.status_cancelled()
-		}[value];
+	function edit(plan: Plan) {
+		editingId = plan.id;
+		editError = '';
+		editForm = {
+			...blankPlan(),
+			counterparty: plan.counterparty ?? '',
+			label: plan.label ?? '',
+			direction: plan.direction,
+			cadence: plan.cadence,
+			amount: (plan.amountCents / 100).toFixed(2),
+			nextDate: plan.nextDate,
+			endDate: plan.endDate ?? '',
+			indefinite: !plan.endDate,
+			accountId: plan.accountId ?? '',
+			categoryId: plan.categoryId ?? '',
+			status: plan.status,
+			note: plan.note ?? ''
+		};
 	}
-
-	function incomeStatusLabel(value: PlannedIncomeStatus): string {
-		return {
-			planned: m.status_planned(),
-			received: m.status_received(),
-			cancelled: m.status_cancelled()
-		}[value];
+	function resetEdit() {
+		editingId = null;
+		editError = '';
+		editForm = blankPlan();
 	}
-
-	function liabilityStatusLabel(value: LiabilityStatus): string {
+	function planPayload(value: ReturnType<typeof blankPlan>) {
 		return {
-			active: m.status_active(),
-			cleared: m.status_cleared()
-		}[value];
+			counterparty: value.counterparty || null,
+			label: value.label || null,
+			direction: value.direction,
+			cadence: value.cadence,
+			amountCents: cents(value.amount),
+			nextDate: value.nextDate,
+			endDate: value.cadence === 'once' || value.indefinite ? null : value.endDate || null,
+			accountId: value.accountId || null,
+			categoryId: value.categoryId || null,
+			status: value.status,
+			note: value.note || null
+		};
+	}
+	function changedPlanPayload(plan: Plan, value: ReturnType<typeof blankPlan>) {
+		const payload = planPayload(value);
+		const current = {
+			counterparty: plan.counterparty,
+			label: plan.label,
+			direction: plan.direction,
+			cadence: plan.cadence,
+			amountCents: plan.amountCents,
+			nextDate: plan.nextDate,
+			endDate: plan.endDate,
+			accountId: plan.accountId,
+			categoryId: plan.categoryId,
+			status: plan.status,
+			note: plan.note
+		};
+		return Object.fromEntries(
+			Object.entries(payload).filter(([key, value]) => value !== current[key as keyof typeof current])
+		);
+	}
+	function togglePlanLiability() {
+		form.createLiability = !form.createLiability;
+		if (form.createLiability) {
+			form.direction = 'expense';
+			form.cadence = form.cadence === 'once' ? 'monthly' : form.cadence;
+			form.categoryId = 'cat-installment-plan';
+			form.indefinite = true;
+			form.liabilityName ||= form.label || form.counterparty;
+		}
+		error = '';
+	}
+	async function createPlan() {
+		error = '';
+		const liabilityAmountCents = cents(form.liabilityAmount);
+		const liabilityInterestRateBps = rateBps(form.liabilityInterestRate);
+		if (
+			form.createLiability &&
+			(!form.liabilityName.trim() ||
+				!Number.isFinite(liabilityAmountCents) ||
+				liabilityAmountCents <= 0 ||
+				!Number.isFinite(liabilityInterestRateBps) ||
+				liabilityInterestRateBps < 0)
+		) {
+			error = m.liability_details_required();
+			return;
+		}
+		try {
+			const response = await fetch('/api/plans', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					...planPayload(form),
+					liability: form.createLiability
+						? {
+								name: form.liabilityName.trim(),
+								amountCents: liabilityAmountCents,
+								asOfDate: form.liabilityAsOfDate,
+								annualInterestRateBps: liabilityInterestRateBps
+							}
+						: undefined
+				})
+			});
+			if (!response.ok) throw new Error(await response.text());
+			form = blankPlan();
+			await load();
+		} catch (e) {
+			error = e instanceof Error ? e.message : m.planning_status_error();
+		}
+	}
+	async function saveEdit() {
+		if (!editingId) return;
+		editError = '';
+		try {
+			const plan = editingPlan;
+			if (!plan) return;
+			const changes = changedPlanPayload(plan, editForm);
+			if (Object.keys(changes).length === 0) return resetEdit();
+			const response = await fetch('/api/plans', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ id: editingId, ...changes })
+			});
+			if (!response.ok) throw new Error(await response.text());
+			resetEdit();
+			await load();
+		} catch (e) {
+			editError = e instanceof Error ? e.message : m.planning_status_error();
+		}
+	}
+	async function changeStatus(plan: Plan, status: Status) {
+		await fetch('/api/plans', {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ id: plan.id, status })
+		});
+		await load();
+	}
+	async function remove(id: string) {
+		await fetch('/api/plans', {
+			method: 'DELETE',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ id })
+		});
+		await load();
+	}
+	async function removeLiability(id: string) {
+		if (!window.confirm(m.delete_liability_confirm())) return;
+		const response = await fetch('/api/liabilities', {
+			method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id })
+		});
+		if (!response.ok) error = await responseError(response);
+		await load();
+	}
+	function suggestionForm(group: RecurringGroup) {
+		return suggestionForms[group.id];
+	}
+	function reviewSuggestion(id: string) {
+		selectedSuggestionId = id;
+		suggestionError = '';
+	}
+	function cancelSuggestion() {
+		selectedSuggestionId = null;
+		suggestionError = '';
+	}
+	function toggleSuggestionLiability(group: RecurringGroup) {
+		const value = suggestionForm(group);
+		value.createLiability = !value.createLiability;
+		if (value.createLiability) {
+			value.direction = 'expense';
+			value.categoryId = 'cat-installment-plan';
+			value.liabilityName ||= group.label || group.payee;
+		}
+		suggestionError = '';
+	}
+	async function responseError(response: Response): Promise<string> {
+		try {
+			const payload = (await response.json()) as { error?: string };
+			return payload.error || m.recurring_confirm_error();
+		} catch {
+			return m.recurring_confirm_error();
+		}
+	}
+	async function confirm(group: RecurringGroup) {
+		const value = suggestionForm(group);
+		suggestionError = '';
+		if (!value.categoryId) {
+			suggestionError = m.recurring_category_required();
+			return;
+		}
+		if (!value.indefinite && !value.endDate) {
+			suggestionError = m.recurring_end_date_required();
+			return;
+		}
+		if (
+			value.createLiability &&
+			(!value.liabilityName.trim() ||
+				cents(value.liabilityAmount) <= 0 ||
+				!Number.isFinite(rateBps(value.liabilityInterestRate)) ||
+				rateBps(value.liabilityInterestRate) < 0)
+		) {
+			suggestionError = m.liability_details_required();
+			return;
+		}
+		try {
+			const response = await fetch(`/api/recurring/${group.id}/confirm`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					categoryId: value.categoryId,
+					label: value.label || null,
+					cadence: value.cadence,
+					expectedAmountCents: cents(value.amount),
+					nextDate: value.nextDate,
+					endDate: value.indefinite ? null : value.endDate,
+					direction: value.direction === 'income' ? 'incoming' : 'outgoing',
+					liability: value.createLiability
+						? {
+								name: value.liabilityName.trim(),
+								amountCents: cents(value.liabilityAmount),
+								asOfDate: value.liabilityAsOfDate,
+								annualInterestRateBps: rateBps(value.liabilityInterestRate)
+							}
+						: null
+				})
+			});
+			if (!response.ok) {
+				suggestionError = await responseError(response);
+				return;
+			}
+			cancelSuggestion();
+			await load();
+		} catch {
+			suggestionError = m.recurring_confirm_error();
+		}
+	}
+	async function ignore(id: string) {
+		await fetch(`/api/recurring/${id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ status: 'ignored' })
+		});
+		await load();
 	}
 </script>
 
-<svelte:head>
-	<title>{m.planning_title()} / {m.app_title()}</title>
-	<meta name="description" content={m.planning_subtitle()} />
-</svelte:head>
-
-<main class="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:py-8">
-	<section class="space-y-2">
-		<h1 class="text-3xl font-semibold tracking-normal text-zinc-950">{m.planning_title()}</h1>
-		<p class="max-w-3xl text-sm leading-6 text-zinc-600">{m.planning_subtitle()}</p>
-		<p class="text-sm text-zinc-500">{status}</p>
-	</section>
-
-	{#if error}
-		<p class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-	{/if}
-
-	<section class="grid gap-4 md:grid-cols-3">
-		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
-			<p class="text-sm text-zinc-500">{m.upcoming_payments()}</p>
-			<p class="mt-2 text-2xl font-semibold text-zinc-950">{centsToEuros(upcomingPaymentTotal)}</p>
-		</div>
-		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
-			<p class="text-sm text-zinc-500">{m.upcoming_income()}</p>
-			<p class="mt-2 text-2xl font-semibold text-emerald-700">
-				{centsToEuros(upcomingIncomeTotal)}
-			</p>
-		</div>
-		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
-			<p class="text-sm text-zinc-500">{m.balance_before_salary()}</p>
-			<p class="mt-2 text-2xl font-semibold text-zinc-950">
-				{projection ? centsToEuros(projection.projectedBalanceCents) : m.not_available()}
-			</p>
-			<p class="mt-1 text-xs text-zinc-500">
-				{projection ? formatDate(projection.projectionDate) : m.not_available()}
-			</p>
-		</div>
-		<div class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm md:col-span-3">
-			<p class="text-sm text-zinc-500">{m.active_liabilities()}</p>
-			<p class="mt-2 text-2xl font-semibold text-red-700">
-				{centsToEuros(activeLiabilityTotal)}
-			</p>
-		</div>
-	</section>
-
-	<section class="grid gap-6 xl:grid-cols-3">
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm xl:col-span-2">
-			<div class="border-b border-zinc-200 p-5">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.contracts_title()}</h2>
+<svelte:head><title>{m.planning_title()}</title></svelte:head>
+<section class="mx-auto max-w-6xl space-y-8 px-4 py-8 sm:px-6">
+	<header>
+		<h1 class="text-3xl font-semibold text-zinc-950">{m.planning_title()}</h1>
+		<p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600">{m.plans_subtitle()}</p>
+	</header>
+	{#if error}<p class="rounded-ui bg-red-50 p-3 text-red-700">{error}</p>{/if}
+	{#snippet manualPlanForm()}
+		<div class="rounded-ui border border-zinc-200 bg-white p-5">
+			<h2 class="text-lg font-semibold text-zinc-950">{m.create_plan()}</h2>
+			<div class="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+				<label>{m.counterparty()}<input bind:value={form.counterparty} class="field" /></label
+				><label>{m.label()}<input bind:value={form.label} class="field" /></label><label
+					>{m.direction()}<Picker
+						bind:value={form.direction}
+						options={directionOptions}
+						placeholder={m.direction()}
+						ariaLabel={m.direction()}
+						disabled={form.createLiability}
+					/></label
+				><label
+					>{m.cadence()}<Picker
+						bind:value={form.cadence}
+						options={cadenceOptions}
+						placeholder={m.cadence()}
+						ariaLabel={m.cadence()}
+						disabled={form.createLiability}
+					/></label
+				><label
+					>{m.amount()}<input bind:value={form.amount} inputmode="decimal" class="field" /></label
+				><label
+					>{m.next_date()}<DatePicker
+						bind:value={form.nextDate}
+						ariaLabel={m.next_date()}
+						todayLabel={m.today()}
+						clearLabel={m.clear()}
+						previousMonthLabel={m.previous_month()}
+						nextMonthLabel={m.next_month()}
+						allowClear={false}
+					/></label
+				><label
+					>{m.account()}<Picker
+						bind:value={form.accountId}
+						options={accountOptions}
+						placeholder={m.all_accounts()}
+						ariaLabel={m.account()}
+					/></label
+				><label
+					>{m.category()}<Picker
+						bind:value={form.categoryId}
+						options={categoryOptions}
+						placeholder={m.no_category()}
+						ariaLabel={m.category()}
+						disabled={form.createLiability}
+					/></label
+				>{#if form.cadence !== 'once'}<label
+						>{m.end_date()}<DatePicker
+							bind:value={form.endDate}
+							disabled={form.indefinite}
+							ariaLabel={m.end_date()}
+							todayLabel={m.today()}
+							clearLabel={m.clear()}
+							previousMonthLabel={m.previous_month()}
+							nextMonthLabel={m.next_month()}
+						/></label
+					><label class="flex items-end gap-2 pb-2"
+						><button
+							type="button"
+							class:active={form.indefinite}
+							class="switch"
+							aria-label={m.indefinite()}
+							aria-pressed={form.indefinite}
+							onclick={() => (form.indefinite = !form.indefinite)}><span></span></button
+						>{m.indefinite()}</label
+					>{/if}<label>{m.note()}<input bind:value={form.note} class="field" /></label>
 			</div>
-			<div class="divide-y divide-zinc-100">
-				{#each contracts as contract (contract.id)}
-					{#if editingContractId === contract.id}
-						<form
-							class="grid gap-4 border-b border-zinc-200 bg-zinc-50 px-5 py-4"
-							onsubmit={(event) => {
-								event.preventDefault();
-								void saveContract(event, contract.id);
-							}}
-						>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.contract_name()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										bind:value={editContractName}
-										required
-									/>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.payee()}</span>
-									<input class="w-full rounded border-zinc-300" bind:value={editContractPayee} />
-								</label>
+			<label class="mt-5 flex items-center gap-2"
+				><button
+					type="button"
+					class:active={form.createLiability}
+					class="switch"
+					aria-label={m.create_liability_from_suggestion()}
+					aria-pressed={form.createLiability}
+					onclick={togglePlanLiability}><span></span></button
+				>{m.create_liability_from_suggestion()}</label
+			>
+			{#if form.createLiability}
+				<div
+					class="mt-4 grid gap-3 rounded-ui border border-zinc-200 bg-zinc-50 p-4 sm:grid-cols-2 lg:grid-cols-4"
+				>
+					<label>{m.liability_name()}<input class="field" bind:value={form.liabilityName} /></label>
+					<label
+						>{m.remaining_balance()}<input
+							class="field"
+							inputmode="decimal"
+							bind:value={form.liabilityAmount}
+						/></label
+					>
+					<label
+						>{m.annual_interest_rate()}<input
+							class="field"
+							inputmode="decimal"
+							placeholder={m.interest_rate_placeholder()}
+							bind:value={form.liabilityInterestRate}
+						/></label
+					>
+					<label
+						>{m.as_of_date()}<DatePicker
+							bind:value={form.liabilityAsOfDate}
+							ariaLabel={m.as_of_date()}
+							todayLabel={m.today()}
+							clearLabel={m.clear()}
+							previousMonthLabel={m.previous_month()}
+							nextMonthLabel={m.next_month()}
+							allowClear={false}
+						/></label
+					>
+				</div>
+			{/if}
+			<div class="mt-5 flex gap-3">
+				<button class="button-primary" type="button" onclick={createPlan}>{m.create_plan()}</button>
+			</div>
+		</div>
+	{/snippet}
+	{#each [{ direction: 'expense' as Direction, title: m.expenses() }, { direction: 'income' as Direction, title: m.income() }] as section}
+		<section class="overflow-visible rounded-ui border border-zinc-200 bg-white">
+			<div
+				class="flex flex-col gap-4 border-b border-zinc-200 p-5 lg:flex-row lg:items-center lg:justify-between"
+			>
+				<h2 class="text-lg font-semibold text-zinc-950">{section.title}</h2>
+				{#if section.direction === 'expense'}
+					<div class="grid gap-x-8 gap-y-3 sm:grid-cols-3">
+						<div>
+							<p class="text-xs text-zinc-500">{m.expenses_remaining_this_month()}</p>
+							<p class="mt-1 text-sm font-medium text-zinc-950">
+								{euros(expenseSummary.remainingThisMonthCents)}
+							</p>
+						</div>
+						<div>
+							<p class="text-xs text-zinc-500">{m.active_contracts()}</p>
+							<p class="mt-1 text-sm font-medium text-zinc-950">
+								{expenseSummary.activeRecurringCount}
+							</p>
+						</div>
+						<div>
+							<p class="text-xs text-zinc-500">{m.monthly_contract_cost()}</p>
+							<p class="mt-1 text-sm font-medium text-zinc-950">
+								{euros(expenseSummary.monthlyRecurringCents)}
+							</p>
+						</div>
+					</div>
+				{:else}
+					<div class="grid gap-x-8 gap-y-3 sm:grid-cols-2">
+						<div>
+							<p class="text-xs text-zinc-500">{m.active_contracts()}</p>
+							<p class="mt-1 text-sm font-medium text-zinc-950">
+								{incomeSummary.activeRecurringCount}
+							</p>
+						</div>
+						<div>
+							<p class="text-xs text-zinc-500">{m.monthly_contract_cost()}</p>
+							<p class="mt-1 text-sm font-medium text-zinc-950">
+								{euros(incomeSummary.monthlyRecurringCents)}
+							</p>
+						</div>
+					</div>
+				{/if}
+			</div>
+			<div>
+				{#each visible(section.direction) as plan (plan.id)}
+					{@const settled = section.direction === 'expense' && isSettledThisMonth(plan)}
+					<article class="border-b border-zinc-100 last:border-0">
+						<div class="flex flex-wrap items-center gap-3 p-4">
+							<span
+								class:text-emerald-600={settled}
+								class:text-rose-500={section.direction === 'expense' && !settled}
+								class:line-through={settled}
+								class="flex min-w-24 items-center gap-2 text-sm font-medium"
+								aria-label={section.direction === 'expense'
+									? `${euros(plan.amountCents)} — ${settled ? m.paid_this_month() : m.still_due_this_month()}`
+									: euros(plan.amountCents)}
+								>{#if section.direction === 'expense'}{#if settled}<svg
+											viewBox="0 0 24 24"
+											fill="currentColor"
+											class="size-[18px] shrink-0 rounded-full bg-white text-emerald-600"
+											aria-hidden="true"
+											><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path
+												d="M17 3.34a10 10 0 1 1 -14.995 8.984l-.005 -.324l.005 -.324a10 10 0 0 1 14.995 -8.336zm-1.293 5.953a1 1 0 0 0 -1.32 -.083l-.094 .083l-3.293 3.292l-1.293 -1.292l-.094 -.083a1 1 0 0 0 -1.403 1.403l.083 .094l2 2l.094 .083a1 1 0 0 0 1.226 0l.094 -.083l4 -4l.083 -.094a1 1 0 0 0 -.083 -1.32z"
+											/></svg
+										>{:else}<svg
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											class="size-[18px] shrink-0 text-rose-500"
+											aria-hidden="true"
+											><path stroke="none" d="M0 0h24v24H0z" fill="none" /><path
+												d="M8.56 3.69a9 9 0 0 0 -2.92 1.95"
+											/><path d="M3.69 8.56a9 9 0 0 0 -.69 3.44" /><path
+												d="M3.69 15.44a9 9 0 0 0 1.95 2.92"
+											/><path d="M8.56 20.31a9 9 0 0 0 3.44 .69" /><path
+												d="M15.44 20.31a9 9 0 0 0 2.92 -1.95"
+											/><path d="M20.31 15.44a9 9 0 0 0 .69 -3.44" /><path
+												d="M20.31 8.56a9 9 0 0 0 -1.95 -2.92"
+											/><path d="M15.44 3.69a9 9 0 0 0 -3.44 -.69" /></svg
+										>{/if}{/if}{euros(plan.amountCents)}</span
+							>
+							<div class="min-w-44 flex-1">
+								<p
+									class="font-medium"
+									class:line-through={settled}
+									class:text-zinc-500={settled}
+									class:text-zinc-950={!settled}
+								>
+									{plan.label || plan.counterparty || m.untitled_plan()}
+								</p>
+								<p
+									class="text-sm"
+									class:line-through={settled}
+									class:text-zinc-400={settled}
+									class:text-zinc-600={!settled}
+								>
+									{plan.nextDate} · {cadenceLabel(plan.cadence)} · {statusLabel(plan.status)}
+								</p>
 							</div>
-							<div class="grid gap-4 sm:grid-cols-4">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.contract_kind()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editContractKind}>
-										{#each contractKinds as option (option)}
-											<option value={option}>{kindLabel(option)}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.cadence()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editContractCadence}>
-										{#each cadences as option (option)}
-											<option value={option}>{cadenceLabel(option)}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.amount()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										bind:value={editContractAmount}
-										inputmode="decimal"
-										required
-									/>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.status()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editContractStatus}>
-										{#each contractStatuses as option (option)}
-											<option value={option}>{contractStatusLabel(option)}</option>
-										{/each}
-									</select>
-								</label>
-							</div>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.next_date()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										type="date"
-										bind:value={editContractNextDate}
-										required
-									/>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.end_date()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										type="date"
-										bind:value={editContractEndDate}
-									/>
-								</label>
-							</div>
-			<div class="grid gap-4 sm:grid-cols-2">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.account()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editContractAccountId}>
-										<option value="">{m.not_available()}</option>
-										{#each accounts as account (account.id)}
-											<option value={account.id}>{account.name}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.category()}</span>
-									<select
-										class="w-full rounded border-zinc-300"
-										bind:value={editContractCategoryId}
+							<button class="button-secondary" onclick={() => edit(plan)}>{m.edit()}</button>
+							{#if plan.status === 'active'}<button
+									class="button-secondary"
+									onclick={() => changeStatus(plan, 'paused')}>{m.pause()}</button
+								>{:else if plan.status === 'paused'}<button
+									class="button-secondary"
+									onclick={() => changeStatus(plan, 'active')}>{m.resume()}</button
+								>{/if}
+							{#if !plan.liabilityId}<button class="button-secondary" onclick={() => remove(plan.id)}>{m.delete()}</button>{/if}
+						</div>
+						{#if editingId === plan.id}
+							<div class="grid gap-4 bg-amber-50 p-5 last:rounded-b-ui">
+								<h3 class="font-semibold">{m.edit_plan()}</h3>
+								<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+									<label
+										>{m.counterparty()}<input
+											bind:value={editForm.counterparty}
+											class="field"
+										/></label
 									>
-										<option value="">{m.uncategorized()}</option>
-										{#each categories as category (category.id)}
-											<option value={category.id}>{category.name}</option>
-										{/each}
-									</select>
-								</label>
+									<label>{m.label()}<input bind:value={editForm.label} class="field" /></label>
+									<label
+										>{m.direction()}<Picker
+											bind:value={editForm.direction}
+											options={directionOptions}
+											placeholder={m.direction()}
+											ariaLabel={m.direction()}
+											disabled={Boolean(editingPlan?.liabilityId)}
+										/></label
+									>
+									<label
+										>{m.cadence()}<Picker
+											bind:value={editForm.cadence}
+											options={editingPlan?.liabilityId
+												? cadenceOptions.filter((option) => option.value !== 'once')
+												: cadenceOptions}
+											placeholder={m.cadence()}
+											ariaLabel={m.cadence()}
+										/></label
+									>
+									<label
+										>{m.amount()}<input
+											bind:value={editForm.amount}
+											inputmode="decimal"
+											class="field"
+										/></label
+									>
+									<label
+										>{m.next_date()}<DatePicker
+											bind:value={editForm.nextDate}
+											ariaLabel={m.next_date()}
+											todayLabel={m.today()}
+											clearLabel={m.clear()}
+											previousMonthLabel={m.previous_month()}
+											nextMonthLabel={m.next_month()}
+											allowClear={false}
+										/></label
+									>
+									<label
+										>{m.account()}<Picker
+											bind:value={editForm.accountId}
+											options={accountOptions}
+											placeholder={m.all_accounts()}
+											ariaLabel={m.account()}
+										/></label
+									>
+									<label
+										>{m.category()}<Picker
+											bind:value={editForm.categoryId}
+											options={categoryOptions}
+											placeholder={m.no_category()}
+											ariaLabel={m.category()}
+											disabled={Boolean(editingPlan?.liabilityId)}
+										/></label
+									>
+									{#if editForm.cadence !== 'once'}<label
+											>{m.end_date()}<DatePicker
+												bind:value={editForm.endDate}
+												disabled={editForm.indefinite}
+												ariaLabel={m.end_date()}
+												todayLabel={m.today()}
+												clearLabel={m.clear()}
+												previousMonthLabel={m.previous_month()}
+												nextMonthLabel={m.next_month()}
+											/></label
+										><label class="flex items-end gap-2 pb-2"
+											><button
+												type="button"
+												class:active={editForm.indefinite}
+												class="switch"
+												aria-label={m.indefinite()}
+												aria-pressed={editForm.indefinite}
+												onclick={() => (editForm.indefinite = !editForm.indefinite)}
+												><span></span></button
+											>{m.indefinite()}</label
+										>{/if}
+									<label class="md:col-span-2"
+										>{m.note()}<input bind:value={editForm.note} class="field" /></label
+									>
+								</div>
+								{#if editError}<p
+										class="text-sm font-medium text-red-700"
+										role="alert"
+										aria-live="polite"
+									>
+										{editError}
+									</p>{/if}
+								<div class="flex gap-2">
+									<button class="button-primary" onclick={saveEdit}>{m.save_plan()}</button><button
+										class="button-secondary"
+										onclick={resetEdit}>{m.cancel()}</button
+									>
+								</div>
 							</div>
-							<div class="flex flex-wrap gap-2">
-								<button
-									class="rounded bg-zinc-950 px-3 py-2 text-sm font-medium text-white"
-									type="submit">{m.save_contract()}</button
-								>
-								<button
-									class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
-									type="button"
-									onclick={cancelContractEdit}>{m.cancel_edit()}</button
+						{/if}
+					</article>
+				{:else}<p class="p-4 text-sm text-zinc-600">{m.no_plans()}</p>{/each}
+			</div>
+		</section>
+	{/each}
+	<section class="overflow-visible rounded-ui border border-zinc-200 bg-white">
+		<div class="border-b border-zinc-200 p-5">
+			<h2 class="text-lg font-semibold text-zinc-950">{m.recurring_title()}</h2>
+		</div>
+		<div>
+			{#each suggestions as suggestion, suggestionIndex (suggestion.id)}
+				{@const value = suggestionForm(suggestion)}
+				<article class="border-b border-zinc-100 last:border-0">
+					<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
+						<div>
+							<p class="font-medium text-zinc-950">{suggestion.label || suggestion.payee}</p>
+							{#if suggestion.label}<p class="text-sm text-zinc-500">{suggestion.payee}</p>{/if}
+							<p class="mt-1 text-sm text-zinc-500">
+								{cadenceLabel(suggestion.cadence)} / {formatDate(suggestion.nextDate)} / {suggestion.confidence}%
+							</p>
+							<p class="mt-1 text-xs text-zinc-500">
+								{suggestion.accountName ?? '—'} / {suggestion.categoryName ?? m.no_category()}
+							</p>
+						</div>
+						<div class="text-left lg:text-right">
+							<p class="text-sm font-medium text-zinc-950">
+								{euros(suggestion.expectedAmountCents)}
+							</p>
+							<div class="mt-2 flex gap-2 lg:justify-end">
+								<button class="button-secondary" onclick={() => reviewSuggestion(suggestion.id)}
+									>{m.confirm_recurring()}</button
+								><button class="button-secondary" onclick={() => ignore(suggestion.id)}
+									>{m.ignore_recurring()}</button
 								>
 							</div>
-						</form>
-					{:else}
-						<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
+						</div>
+					</div>
+					{#if selectedSuggestionId === suggestion.id}
+						<div
+							class:rounded-b-ui={suggestionIndex === suggestions.length - 1}
+							class="grid gap-4 bg-amber-50 p-5"
+						>
 							<div>
-								<p class="font-medium text-zinc-950">{contract.name}</p>
-								<p class="mt-1 text-sm text-zinc-500">
-									{kindLabel(contract.kind)} / {cadenceLabel(contract.cadence)} / {formatDate(
-										contract.nextDate
-									)}
+								<h3 class="font-semibold">{m.review_recurring({ payee: suggestion.payee })}</h3>
+								<p class="mt-1 text-sm text-zinc-600">
+									Confidence {suggestion.confidence}% · interval {suggestion.confidenceFactors
+										.interval}/40 · amount {suggestion.confidenceFactors.amount}/30 · history {suggestion
+										.confidenceFactors.history}/20 · recency {suggestion.confidenceFactors
+										.recency}/10
+								</p>
+							</div>
+							<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+								<label
+									>{m.direction()}<Picker
+										bind:value={value.direction}
+										options={directionOptions}
+										placeholder={m.direction()}
+										ariaLabel={m.direction()}
+										disabled={value.createLiability}
+									/></label
+								>
+								<label
+									>{m.category()}<Picker
+										bind:value={value.categoryId}
+										options={[
+											{ value: '', label: m.no_category() },
+											...categories
+												.filter((category) =>
+													value.direction === 'income'
+														? category.type === 'income'
+														: category.type !== 'income' && category.type !== 'transfer'
+												)
+												.map((category) => ({ value: category.id, label: category.name }))
+										]}
+										placeholder={m.no_category()}
+										ariaLabel={m.category()}
+										disabled={value.createLiability}
+									/></label
+								>
+								<label
+									>{m.cadence()}<Picker
+										bind:value={value.cadence}
+										options={cadenceOptions.filter((option) => option.value !== 'once')}
+										placeholder={m.cadence()}
+										ariaLabel={m.cadence()}
+									/></label
+								>
+								<label>{m.amount()}<input class="field" bind:value={value.amount} /></label>
+								<label class="sm:col-span-2 lg:col-span-4"
+									>{m.label()}<input class="field" bind:value={value.label} /></label
+								>
+								<label
+									>{m.next_date()}<DatePicker
+										bind:value={value.nextDate}
+										ariaLabel={m.next_date()}
+										todayLabel={m.today()}
+										clearLabel={m.clear()}
+										previousMonthLabel={m.previous_month()}
+										nextMonthLabel={m.next_month()}
+										allowClear={false}
+									/></label
+								>
+								<label
+									>{m.end_date()}<DatePicker
+										bind:value={value.endDate}
+										disabled={value.indefinite}
+										ariaLabel={m.end_date()}
+										todayLabel={m.today()}
+										clearLabel={m.clear()}
+										previousMonthLabel={m.previous_month()}
+										nextMonthLabel={m.next_month()}
+									/></label
+								>
+								<label class="flex items-end gap-2 pb-2"
+									><button
+										type="button"
+										class:active={value.indefinite}
+										class="switch"
+										aria-label={m.indefinite()}
+										aria-pressed={value.indefinite}
+										onclick={() => (value.indefinite = !value.indefinite)}><span></span></button
+									>{m.indefinite()}</label
+								>
+							</div>
+							<label class="flex items-center gap-2"
+								><button
+									type="button"
+									class:active={value.createLiability}
+									class="switch"
+									aria-label={m.create_liability_from_suggestion()}
+									aria-pressed={value.createLiability}
+									onclick={() => toggleSuggestionLiability(suggestion)}><span></span></button
+								>{m.create_liability_from_suggestion()}</label
+							>
+							{#if value.createLiability}
+								<div
+									class="grid gap-3 rounded-ui border border-amber-200 bg-white/70 p-4 sm:grid-cols-2 lg:grid-cols-4"
+								>
+									<label
+										>{m.liability_name()}<input
+											class="field"
+											bind:value={value.liabilityName}
+										/></label
+									>
+									<label
+										>{m.remaining_balance()}<input
+											class="field"
+											inputmode="decimal"
+											bind:value={value.liabilityAmount}
+										/></label
+									>
+									<label
+										>{m.annual_interest_rate()}<input
+											class="field"
+											inputmode="decimal"
+											placeholder={m.interest_rate_placeholder()}
+											bind:value={value.liabilityInterestRate}
+										/></label
+									>
+									<label
+										>{m.as_of_date()}<DatePicker
+											bind:value={value.liabilityAsOfDate}
+											ariaLabel={m.as_of_date()}
+											todayLabel={m.today()}
+											clearLabel={m.clear()}
+											previousMonthLabel={m.previous_month()}
+											nextMonthLabel={m.next_month()}
+											allowClear={false}
+										/></label
+									>
+								</div>
+							{/if}
+							<div class="rounded border border-amber-200 bg-white p-3">
+								<p class="text-sm font-medium text-zinc-700">{m.supporting_transactions()}</p>
+								{#each suggestion.evidence as item (item.transactionId)}<div
+										class="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-sm"
+									>
+										<div class="min-w-0">
+											<p>{formatDate(item.bookingDate)} · {item.payee ?? suggestion.payee}</p>
+											{#if item.description}<p
+													class="mt-1 break-words text-xs leading-5 text-zinc-500"
+												>
+													<span class="font-medium text-zinc-600">{m.transaction_purpose()}:</span>
+													{item.description}
+												</p>{/if}
+										</div>
+										<span class="shrink-0">{euros(item.amountCents)}</span>
+									</div>{/each}
+							</div>
+							{#if suggestionError}<p
+									class="text-sm font-medium text-red-700"
+									role="alert"
+									aria-live="polite"
+								>
+									{suggestionError}
+								</p>{/if}
+							<div class="flex gap-2">
+								<button class="button-primary" onclick={() => confirm(suggestion)}
+									>{m.confirm_recurring()}</button
+								><button class="button-secondary" onclick={cancelSuggestion}>{m.cancel()}</button>
+							</div>
+						</div>
+					{/if}
+				</article>
+			{:else}<p class="p-5 text-sm text-zinc-600">{m.no_recurring_groups()}</p>{/each}
+		</div>
+	</section>
+	{@render manualPlanForm()}
+	<section class="overflow-hidden rounded-ui border border-zinc-200 bg-white">
+		<div class="border-b border-zinc-200 p-5">
+			<h2 class="text-lg font-semibold text-zinc-950">{m.liabilities_title()}</h2>
+		</div>
+		<div>
+			{#each liabilities as liability (liability.id)}<article
+					class="border-b border-zinc-100 p-5 last:border-0"
+				>
+					<header class="flex flex-wrap items-start justify-between gap-4">
+						<div class="min-w-0">
+							<div class="flex flex-wrap items-center gap-2">
+								<h3 class="font-medium text-zinc-950">
+									{liability.plan?.label || liability.name}
+								</h3>
+								<span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600"
+									>{liabilityStatusLabel(liability.status)}</span
+								>
+							</div>
+							<p class="mt-1 text-sm text-zinc-600">
+								{liability.name}{#if liability.plan?.counterparty && liability.plan.counterparty !== liability.name}
+									· {liability.plan.counterparty}{/if}
+							</p>
+							{#if liability.accountName || liability.plan?.categoryName}<p
+									class="mt-1 text-xs text-zinc-500"
+								>
+									{liability.accountName ?? m.all_accounts()}{#if liability.plan?.categoryName}
+										· {liability.plan.categoryName}{/if}
+								</p>{/if}
+						</div>
+						<div class="text-right">
+							<p class="text-xs font-medium text-zinc-500">{m.remaining_balance()}</p>
+							<p class="mt-1 text-lg font-medium text-zinc-950">{euros(liability.amountCents)}</p>
+						</div>
+					</header>
+
+					<div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+						<div class="rounded-ui bg-zinc-50 p-3">
+							<p class="text-xs font-medium text-zinc-500">{m.liability_installment()}</p>
+							<p class="mt-1 text-sm font-medium text-zinc-950">
+								{liability.plan ? euros(liability.plan.amountCents) : '—'}
+							</p>
+							{#if liability.plan}<p class="mt-1 text-xs text-zinc-500">
+									{cadenceLabel(liability.plan.cadence)}
+								</p>{/if}
+						</div>
+						<div class="rounded-ui bg-zinc-50 p-3">
+							<p class="text-xs font-medium text-zinc-500">{m.liability_next_payment()}</p>
+							<p class="mt-1 text-sm font-medium text-zinc-950">
+								{liability.plan ? formatDate(liability.plan.nextDate) : '—'}
+							</p>
+							{#if liability.plan}<p class="mt-1 text-xs text-zinc-500">
+									{statusLabel(liability.plan.status)}
+								</p>{/if}
+						</div>
+						<div class="rounded-ui bg-zinc-50 p-3">
+							<p class="text-xs font-medium text-zinc-500">{m.liability_next_split()}</p>
+							{#if liability.projection}<p class="mt-1 text-sm font-medium text-zinc-950">
+									{m.liability_interest()}
+									{euros(liability.projection.nextInterestCents)}
 								</p>
 								<p class="mt-1 text-xs text-zinc-500">
-									{contract.accountName ?? m.not_available()} / {contract.categoryName ??
-										m.uncategorized()}
+									{m.liability_principal()}
+									{euros(liability.projection.nextPrincipalCents)}
+								</p>{:else}<p class="mt-1 text-sm font-medium text-zinc-950">—</p>{/if}
+						</div>
+						<div class="rounded-ui bg-zinc-50 p-3">
+							<p class="text-xs font-medium text-zinc-500">{m.liability_estimated_payoff()}</p>
+							{#if liability.projection?.estimatedPayoffDate && liability.projection.estimatedRemainingPayments !== null}<p
+									class="mt-1 text-sm font-medium text-zinc-950"
+								>
+									{formatDate(liability.projection.estimatedPayoffDate)}
 								</p>
-							</div>
-							<div class="text-left lg:text-right">
-								<p class="font-semibold text-zinc-950">
-									{centsToEuros(contract.expectedAmountCents)}
-								</p>
-								<div class="mt-2 flex flex-wrap gap-2 lg:justify-end">
-									<button
-										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700"
-										type="button"
-										onclick={() => startContractEdit(contract)}>{m.edit_contract()}</button
-									>
-									{#each contractStatuses as option (option)}
-										<button
-											class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
-											type="button"
-											disabled={contract.status === option}
-											onclick={() => updateContractStatus(contract, option)}
-										>
-											{contractStatusLabel(option)}
-										</button>
-									{/each}
-								</div>
-							</div>
+								<p class="mt-1 text-xs text-zinc-500">
+									{m.liability_payments_remaining({
+										count: liability.projection.estimatedRemainingPayments
+									})}
+								</p>{:else}<p class="mt-1 text-sm font-medium text-zinc-950">—</p>{/if}
 						</div>
-					{/if}
-				{:else}
-					<p class="p-5 text-sm text-zinc-600">{m.no_contracts()}</p>
-				{/each}
-			</div>
-		</section>
+					</div>
 
-		<form class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm" onsubmit={createContract}>
-			<h2 class="text-lg font-semibold text-zinc-950">{m.new_contract()}</h2>
-			<div class="mt-5 grid gap-4">
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.contract_name()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={contractName} required />
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.payee()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={contractPayee} />
-				</label>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.contract_kind()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={contractKind}>
-							{#each contractKinds as option (option)}
-								<option value={option}>{kindLabel(option)}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.cadence()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={contractCadence}>
-							{#each cadences as option (option)}
-								<option value={option}>{cadenceLabel(option)}</option>
-							{/each}
-						</select>
-					</label>
-				</div>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.amount()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							bind:value={contractAmount}
-							inputmode="decimal"
-							required
-						/>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.next_date()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							type="date"
-							bind:value={contractNextDate}
-							required
-						/>
-					</label>
-				</div>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.end_date()}</span>
-					<input class="w-full rounded border-zinc-300" type="date" bind:value={contractEndDate} />
-				</label>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.account()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={contractAccountId}>
-							<option value="">{m.not_available()}</option>
-							{#each accounts as account (account.id)}
-								<option value={account.id}>{account.name}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.category()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={contractCategoryId}>
-							<option value="">{m.uncategorized()}</option>
-							{#each categories as category (category.id)}
-								<option value={category.id}>{category.name}</option>
-							{/each}
-						</select>
-					</label>
-				</div>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.status()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={contractStatus}>
-						{#each contractStatuses as option (option)}
-							<option value={option}>{contractStatusLabel(option)}</option>
-						{/each}
-					</select>
-				</label>
-				<button
-					class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-					type="submit"
-					disabled={isSavingContract}
-				>
-					{m.create_contract()}
-				</button>
-			</div>
-		</form>
+					<div class="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-zinc-500">
+						<span
+							>{m.annual_interest_rate()}: {liability.annualInterestRateBps === null
+								? '—'
+								: `${(liability.annualInterestRateBps / 100).toFixed(2)}%`}</span
+						>
+						<span>{m.as_of_date()}: {formatDate(liability.asOfDate)}</span>
+						{#if liability.projection?.estimatedRemainingInterestCents !== null && liability.projection}<span
+								>{m.liability_estimated_interest()}: {euros(
+									liability.projection.estimatedRemainingInterestCents
+								)}</span
+							>{/if}
+						{#if liability.plan?.endDate}<span
+								>{m.end_date()}: {formatDate(liability.plan.endDate)}</span
+							>{/if}
+					</div>
+					{#if liability.projection && liability.projection.nextPrincipalCents <= 0}<p
+							class="mt-3 text-sm font-medium text-amber-700"
+						>
+							{m.liability_not_amortizing()}
+						</p>{/if}
+					{#if liability.note}<p class="mt-3 text-sm text-zinc-600">{liability.note}</p>{/if}
+					<div class="mt-4"><button class="button-secondary" onclick={() => removeLiability(liability.id)}>{m.delete_liability()}</button></div>
+				</article>{:else}<p class="p-4 text-sm text-zinc-600">{m.no_liabilities()}</p>{/each}
+		</div>
 	</section>
+</section>
 
-	<section class="grid gap-6 xl:grid-cols-2">
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
-			<div class="border-b border-zinc-200 p-5">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.planned_payments_title()}</h2>
-			</div>
-			<div class="divide-y divide-zinc-100">
-				{#each plannedPayments as payment (payment.id)}
-					{#if editingPaymentId === payment.id}
-						<form
-							class="grid gap-4 border-b border-zinc-200 bg-zinc-50 px-5 py-4"
-							onsubmit={(event) => savePayment(event, payment.id)}
-						>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.payee()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										bind:value={editPaymentPayee}
-										required
-									/>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.amount()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										bind:value={editPaymentAmount}
-										inputmode="decimal"
-										required
-									/>
-								</label>
-							</div>
-							<div class="grid gap-4 sm:grid-cols-3">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.due_date()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										type="date"
-										bind:value={editPaymentDueDate}
-										required
-									/>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.status()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editPaymentStatus}>
-										{#each paymentStatuses as option (option)}
-											<option value={option}>{paymentStatusLabel(option)}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.account()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editPaymentAccountId}>
-										<option value="">{m.not_available()}</option>
-										{#each accounts as account (account.id)}
-											<option value={account.id}>{account.name}</option>
-										{/each}
-									</select>
-								</label>
-							</div>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.category()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editPaymentCategoryId}>
-										<option value="">{m.uncategorized()}</option>
-										{#each categories as category (category.id)}
-											<option value={category.id}>{category.name}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.notes()}</span>
-									<input class="w-full rounded border-zinc-300" bind:value={editPaymentNote} />
-								</label>
-							</div>
-							<div class="flex flex-wrap gap-2">
-								<button
-									class="rounded bg-zinc-950 px-3 py-2 text-sm font-medium text-white"
-									type="submit">{m.save_planned_payment()}</button
-								>
-								<button
-									class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
-									type="button"
-									onclick={cancelPaymentEdit}>{m.cancel_edit()}</button
-								>
-							</div>
-						</form>
-					{:else}
-						<div class="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto]">
-							<div>
-								<p class="font-medium text-zinc-950">{payment.payee}</p>
-								<p class="mt-1 text-sm text-zinc-500">
-									{formatDate(payment.dueDate)} / {paymentStatusLabel(payment.status)}
-								</p>
-							</div>
-							<div class="text-left sm:text-right">
-								<p class="font-semibold text-zinc-950">{centsToEuros(payment.amountCents)}</p>
-								<div class="mt-2 flex flex-wrap gap-2 sm:justify-end">
-									<button
-										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700"
-										type="button"
-										onclick={() => startPaymentEdit(payment)}>{m.edit_planned_payment()}</button
-									>
-									{#each paymentStatuses as option (option)}
-										<button
-											class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
-											type="button"
-											disabled={payment.status === option}
-											onclick={() => updatePaymentStatus(payment, option)}
-										>
-											{paymentStatusLabel(option)}
-										</button>
-									{/each}
-								</div>
-							</div>
-						</div>
-					{/if}
-				{:else}
-					<p class="p-5 text-sm text-zinc-600">{m.no_planned_payments()}</p>
-				{/each}
-			</div>
-			<form class="grid gap-4 border-t border-zinc-200 p-5" onsubmit={createPayment}>
-				<h3 class="text-sm font-semibold text-zinc-950">{m.new_planned_payment()}</h3>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.payee()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={paymentPayee} required />
-				</label>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.amount()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							bind:value={paymentAmount}
-							inputmode="decimal"
-							required
-						/>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.due_date()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							type="date"
-							bind:value={paymentDueDate}
-							required
-						/>
-					</label>
-				</div>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.account()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={paymentAccountId}>
-							<option value="">{m.not_available()}</option>
-							{#each accounts as account (account.id)}
-								<option value={account.id}>{account.name}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.category()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={paymentCategoryId}>
-							<option value="">{m.uncategorized()}</option>
-							{#each categories as category (category.id)}
-								<option value={category.id}>{category.name}</option>
-							{/each}
-						</select>
-					</label>
-				</div>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.notes()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={paymentNote} />
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.status()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={paymentStatus}>
-						{#each paymentStatuses as option (option)}
-							<option value={option}>{paymentStatusLabel(option)}</option>
-						{/each}
-					</select>
-				</label>
-				<button
-					class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-					type="submit"
-					disabled={isSavingPayment}
-				>
-					{m.create_planned_payment()}
-				</button>
-			</form>
-		</section>
-
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
-			<div class="border-b border-zinc-200 p-5">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.planned_income_title()}</h2>
-			</div>
-			<div class="divide-y divide-zinc-100">
-				{#each plannedIncome as income (income.id)}
-					{#if editingIncomeId === income.id}
-						<form
-							class="grid gap-4 border-b border-zinc-200 bg-zinc-50 px-5 py-4"
-							onsubmit={(event) => saveIncome(event, income.id)}
-						>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.payer()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										bind:value={editIncomePayer}
-										required
-									/>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.amount()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										bind:value={editIncomeAmount}
-										inputmode="decimal"
-										required
-									/>
-								</label>
-							</div>
-							<div class="grid gap-4 sm:grid-cols-3">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.due_date()}</span>
-									<input
-										class="w-full rounded border-zinc-300"
-										type="date"
-										bind:value={editIncomeDueDate}
-										required
-									/>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.status()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editIncomeStatus}>
-										{#each incomeStatuses as option (option)}
-											<option value={option}>{incomeStatusLabel(option)}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.account()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editIncomeAccountId}>
-										<option value="">{m.not_available()}</option>
-										{#each accounts as account (account.id)}
-											<option value={account.id}>{account.name}</option>
-										{/each}
-									</select>
-								</label>
-							</div>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.category()}</span>
-									<select class="w-full rounded border-zinc-300" bind:value={editIncomeCategoryId}>
-										<option value="">{m.uncategorized()}</option>
-										{#each categories as category (category.id)}
-											<option value={category.id}>{category.name}</option>
-										{/each}
-									</select>
-								</label>
-								<label class="grid gap-1 text-sm font-medium text-zinc-700">
-									<span>{m.notes()}</span>
-									<input class="w-full rounded border-zinc-300" bind:value={editIncomeNote} />
-								</label>
-							</div>
-							<div class="flex flex-wrap gap-2">
-								<button
-									class="rounded bg-zinc-950 px-3 py-2 text-sm font-medium text-white"
-									type="submit">{m.save_planned_income()}</button
-								>
-								<button
-									class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
-									type="button"
-									onclick={cancelIncomeEdit}>{m.cancel_edit()}</button
-								>
-							</div>
-						</form>
-					{:else}
-						<div class="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto]">
-							<div>
-								<p class="font-medium text-zinc-950">{income.payer}</p>
-								<p class="mt-1 text-sm text-zinc-500">
-									{formatDate(income.dueDate)} / {incomeStatusLabel(income.status)}
-								</p>
-							</div>
-							<div class="text-left sm:text-right">
-								<p class="font-semibold text-emerald-700">{centsToEuros(income.amountCents)}</p>
-								<div class="mt-2 flex flex-wrap gap-2 sm:justify-end">
-									<button
-										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700"
-										type="button"
-										onclick={() => startIncomeEdit(income)}>{m.edit_planned_income()}</button
-									>
-									{#each incomeStatuses as option (option)}
-										<button
-											class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
-											type="button"
-											disabled={income.status === option}
-											onclick={() => updateIncomeStatus(income, option)}
-										>
-											{incomeStatusLabel(option)}
-										</button>
-									{/each}
-								</div>
-							</div>
-						</div>
-					{/if}
-				{:else}
-					<p class="p-5 text-sm text-zinc-600">{m.no_planned_income()}</p>
-				{/each}
-			</div>
-			<form class="grid gap-4 border-t border-zinc-200 p-5" onsubmit={createIncome}>
-				<h3 class="text-sm font-semibold text-zinc-950">{m.new_planned_income()}</h3>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.payer()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={incomePayer} required />
-				</label>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.amount()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							bind:value={incomeAmount}
-							inputmode="decimal"
-							required
-						/>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.due_date()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							type="date"
-							bind:value={incomeDueDate}
-							required
-						/>
-					</label>
-				</div>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.account()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={incomeAccountId}>
-							<option value="">{m.not_available()}</option>
-							{#each accounts as account (account.id)}
-								<option value={account.id}>{account.name}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.category()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={incomeCategoryId}>
-							<option value="">{m.uncategorized()}</option>
-							{#each categories as category (category.id)}
-								<option value={category.id}>{category.name}</option>
-							{/each}
-						</select>
-					</label>
-				</div>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.notes()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={incomeNote} />
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.status()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={incomeStatus}>
-						{#each incomeStatuses as option (option)}
-							<option value={option}>{incomeStatusLabel(option)}</option>
-						{/each}
-					</select>
-				</label>
-				<button
-					class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-					type="submit"
-					disabled={isSavingIncome}
-				>
-					{m.create_planned_income()}
-				</button>
-			</form>
-		</section>
-	</section>
-
-	<section class="grid gap-6 xl:grid-cols-3">
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm xl:col-span-2">
-			<div class="border-b border-zinc-200 p-5">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.liabilities_title()}</h2>
-			</div>
-			<div class="divide-y divide-zinc-100">
-				{#each liabilities as liability (liability.id)}
-					<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
-						<div>
-							<p class="font-medium text-zinc-950">{liability.name}</p>
-							<p class="mt-1 text-sm text-zinc-500">
-								{formatDate(liability.asOfDate)} / {liabilityStatusLabel(liability.status)}
-							</p>
-							<p class="mt-1 text-xs text-zinc-500">
-								{liability.accountName ?? m.not_available()}
-								{#if liability.note}
-									/ {liability.note}
-								{/if}
-							</p>
-						</div>
-						<div class="text-left lg:text-right">
-							<p class="font-semibold text-red-700">{centsToEuros(liability.amountCents)}</p>
-							<div class="mt-2 flex flex-wrap gap-2 lg:justify-end">
-								{#each liabilityStatuses as option (option)}
-									<button
-										class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
-										type="button"
-										disabled={liability.status === option}
-										onclick={() => updateLiabilityStatus(liability, option)}
-									>
-										{liabilityStatusLabel(option)}
-									</button>
-								{/each}
-								<button
-									class="rounded border border-red-200 px-2 py-1 text-xs font-medium text-red-700"
-									type="button"
-									onclick={() => deleteLiability(liability)}
-								>
-									{m.delete_liability()}
-								</button>
-							</div>
-						</div>
-					</div>
-				{:else}
-					<p class="p-5 text-sm text-zinc-600">{m.no_liabilities()}</p>
-				{/each}
-			</div>
-		</section>
-
-		<form class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm" onsubmit={createLiability}>
-			<h2 class="text-lg font-semibold text-zinc-950">{m.new_liability()}</h2>
-			<div class="mt-5 grid gap-4">
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.liability_name()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={liabilityName} required />
-				</label>
-				<div class="grid grid-cols-2 gap-3">
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.amount()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							bind:value={liabilityAmount}
-							inputmode="decimal"
-							required
-						/>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.as_of_date()}</span>
-						<input
-							class="w-full rounded border-zinc-300"
-							type="date"
-							bind:value={liabilityAsOfDate}
-							required
-						/>
-					</label>
-				</div>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.account()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={liabilityAccountId}>
-						<option value="">{m.not_available()}</option>
-						{#each accounts as account (account.id)}
-							<option value={account.id}>{account.name}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.notes()}</span>
-					<input class="w-full rounded border-zinc-300" bind:value={liabilityNote} />
-				</label>
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.status()}</span>
-					<select class="w-full rounded border-zinc-300" bind:value={liabilityStatus}>
-						{#each liabilityStatuses as option (option)}
-							<option value={option}>{liabilityStatusLabel(option)}</option>
-						{/each}
-					</select>
-				</label>
-				<button
-					class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-					type="submit"
-					disabled={isSavingLiability}
-				>
-					{m.create_liability()}
-				</button>
-			</div>
-		</form>
-	</section>
-
-	<section class="grid gap-6 xl:grid-cols-3">
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm xl:col-span-2">
-			<div class="flex items-center justify-between gap-3 border-b border-zinc-200 p-5">
-				<h2 class="text-lg font-semibold text-zinc-950">{m.recurring_title()}</h2>
-				<button
-					class="rounded border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700"
-					type="button"
-					disabled={isUpdatingRecurring}
-					onclick={refreshRecurringSuggestions}>{m.refresh_suggestions()}</button
-				>
-			</div>
-			{#if selectedRecurring}
-				<form
-					class="grid gap-4 border-b border-zinc-200 bg-amber-50 p-5"
-					onsubmit={confirmRecurring}
-				>
-					<div>
-						<h3 class="font-semibold text-zinc-950">
-							{m.review_recurring({ payee: selectedRecurring.payee })}
-						</h3>
-						<p class="mt-1 text-sm text-zinc-600">
-							Confidence {selectedRecurring.confidence}% · interval {selectedRecurring
-								.confidenceFactors.interval}/40 · amount {selectedRecurring.confidenceFactors
-								.amount}/30 · history {selectedRecurring.confidenceFactors.history}/20 · recency {selectedRecurring
-								.confidenceFactors.recency}/10
-						</p>
-					</div>
-					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-						<label class="grid gap-1 text-sm"
-							><span>{m.direction()}</span><select bind:value={recurringDirection}
-								><option value="outgoing">{m.outgoing()}</option><option value="incoming"
-									>{m.incoming()}</option
-								></select
-							></label
-						>
-						<label class="grid gap-1 text-sm"
-							><span>{m.category()}</span><select bind:value={recurringCategoryId} required
-								><option value="" disabled>{m.select_category()}</option
-								>{#each categories.filter( (category) => (recurringDirection === 'incoming' ? category.type === 'income' : category.type !== 'income' && category.type !== 'transfer') ) as category (category.id)}<option
-										value={category.id}>{category.name}</option
-									>{/each}</select
-							></label
-						>
-						<label class="grid gap-1 text-sm"
-							><span>{m.cadence()}</span><select bind:value={recurringCadence}
-								>{#each cadences as cadence (cadence)}<option value={cadence}
-										>{cadenceLabel(cadence)}</option
-									>{/each}</select
-							></label
-						>
-						<label class="grid gap-1 text-sm"
-							><span>{m.amount()}</span><input bind:value={recurringAmount} required /></label
-						>
-						<label class="grid gap-1 text-sm sm:col-span-2 lg:col-span-5"
-							><span>{m.label()}</span><input bind:value={recurringLabel} /></label
-						>
-						<label class="grid gap-1 text-sm"
-							><span>{m.next_date()}</span><input
-								type="date"
-								bind:value={recurringNextDate}
-								required
-							/></label
-						>
-					</div>
-					<div class="rounded border border-amber-200 bg-white p-3">
-						<p class="text-sm font-medium text-zinc-700">{m.supporting_transactions()}</p>
-						{#each selectedRecurring.evidence as item (item.transactionId)}<div
-								class="mt-2 flex justify-between gap-3 text-sm"
-							>
-								<span>{formatDate(item.bookingDate)} · {item.payee ?? selectedRecurring.payee}</span
-								><span>{centsToEuros(item.amountCents)}</span>
-							</div>{/each}
-					</div>
-					<div class="flex gap-2">
-						<button
-							class="rounded bg-zinc-950 px-4 py-2 text-sm font-medium text-white"
-							type="submit"
-							disabled={isUpdatingRecurring || !recurringCategoryId}>{m.confirm_recurring()}</button
-						><button
-							class="rounded border border-zinc-300 px-4 py-2 text-sm"
-							type="button"
-							onclick={() => (selectedRecurring = null)}>{m.cancel()}</button
-						>
-					</div>
-				</form>
-			{/if}
-			<div class="divide-y divide-zinc-100">
-				{#each recurringGroups as group (group.id)}
-					<div class="grid gap-3 px-5 py-4 lg:grid-cols-[1fr_auto]">
-						<div>
-							<p class="font-medium text-zinc-950">{group.label || group.payee}</p>
-							{#if group.label}<p class="text-sm text-zinc-500">{group.payee}</p>{/if}
-							<p class="mt-1 text-sm text-zinc-500">
-								{cadenceLabel(group.cadence)} / {formatDate(group.nextDate)} / {group.confidence}%
-							</p>
-							<p class="mt-1 text-xs text-zinc-500">
-								{group.accountName ?? m.not_available()} / {group.categoryName ?? m.uncategorized()}
-							</p>
-						</div>
-						<div class="text-left lg:text-right">
-							<p class="font-semibold text-zinc-950">{centsToEuros(group.expectedAmountCents)}</p>
-							<div class="mt-2 flex flex-wrap gap-2 lg:justify-end">
-								<button
-									class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
-									type="button"
-									disabled={group.status === 'confirmed' || isUpdatingRecurring}
-									onclick={() => reviewRecurring(group)}
-								>
-									{m.confirm_recurring()}
-								</button>
-								<button
-									class="rounded border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 disabled:bg-zinc-100"
-									type="button"
-									disabled={group.status === 'ignored' || isUpdatingRecurring}
-									onclick={() => updateRecurringStatus(group, 'ignored')}
-								>
-									{m.ignore_recurring()}
-								</button>
-							</div>
-						</div>
-					</div>
-				{:else}
-					<p class="p-5 text-sm text-zinc-600">{m.no_recurring_groups()}</p>
-				{/each}
-			</div>
-		</section>
-
-		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
-			<h2 class="text-lg font-semibold text-zinc-950">{m.current_month_outlook()}</h2>
-			<div class="mt-5 grid gap-4">
-				<div>
-					<h3 class="text-sm font-semibold text-zinc-950">{m.upcoming_payments()}</h3>
-					<ul class="mt-2 grid gap-2 text-sm text-zinc-600">
-						{#each upcomingPayments as payment (payment.id)}
-							<li class="flex justify-between gap-3">
-								<span>{formatDate(payment.dueDate)} {payment.payee}</span>
-								<span class="font-medium text-zinc-950">{centsToEuros(payment.amountCents)}</span>
-							</li>
-						{:else}
-							<li>{m.no_upcoming_payments()}</li>
-						{/each}
-					</ul>
-				</div>
-				<div>
-					<h3 class="text-sm font-semibold text-zinc-950">{m.upcoming_income()}</h3>
-					<ul class="mt-2 grid gap-2 text-sm text-zinc-600">
-						{#each upcomingIncome as income (income.id)}
-							<li class="flex justify-between gap-3">
-								<span>{formatDate(income.dueDate)} {income.payer}</span>
-								<span class="font-medium text-emerald-700">{centsToEuros(income.amountCents)}</span>
-							</li>
-						{:else}
-							<li>{m.no_upcoming_income()}</li>
-						{/each}
-					</ul>
-				</div>
-				<div class="rounded border border-zinc-200 bg-zinc-50 p-4 text-sm">
-					<p class="font-medium text-zinc-950">{m.balance_before_salary()}</p>
-					<form class="mt-3 grid gap-2" onsubmit={applyManualNextSalaryDate}>
-						<label class="grid gap-1 text-sm font-medium text-zinc-700">
-							<span>{m.manual_next_salary_date()}</span>
-							<input
-								class="w-full rounded border-zinc-300"
-								type="date"
-								bind:value={manualNextSalaryDate}
-							/>
-						</label>
-						<button
-							class="rounded border border-zinc-300 px-3 py-2 text-xs font-medium text-zinc-700"
-							type="submit"
-						>
-							{m.apply_projection_date()}
-						</button>
-					</form>
-					<p class="mt-1 text-zinc-600">
-						{projection?.manualNextSalaryDate
-							? `${m.manual_salary_date()}: ${formatDate(projection.manualNextSalaryDate)}`
-							: projection?.nextIncome
-								? `${m.next_income()}: ${projection.nextIncome.payer} ${formatDate(projection.nextIncome.dueDate)}`
-								: m.no_upcoming_income()}
-					</p>
-					<p class="mt-2 text-lg font-semibold text-zinc-950">
-						{projection ? centsToEuros(projection.projectedBalanceCents) : m.not_available()}
-					</p>
-				</div>
-			</div>
-		</section>
-	</section>
-</main>
+<style>
+	label {
+		font-size: 0.875rem;
+		font-weight: 500;
+		line-height: 1.25rem;
+		color: #3f3f46;
+	}
+	.field {
+		display: block;
+		width: 100%;
+		margin-top: 0.35rem;
+		border: 1px solid #d4d4d8;
+		border-radius: 0.75rem;
+		padding: 0.65rem 1rem;
+		background: white;
+	}
+	.button-primary,
+	.button-secondary {
+		display: inline-flex;
+		height: 44px;
+		align-items: center;
+		justify-content: center;
+		box-sizing: border-box;
+		font-size: 0.875rem;
+		line-height: 1.25rem;
+	}
+	.button-primary {
+		border-radius: 999px;
+		background: #09090b;
+		color: white;
+		padding: 0 1.1rem;
+		font-weight: 600;
+	}
+	.button-secondary {
+		border: 1px solid #d4d4d8;
+		border-radius: 999px;
+		padding: 0 0.9rem;
+	}
+	.switch {
+		width: 52px;
+		height: 32px;
+		border-radius: 999px;
+		background: #c7c7cc;
+		padding: 2px;
+		transition: 0.2s;
+	}
+	.switch span {
+		display: block;
+		width: 28px;
+		height: 28px;
+		border-radius: 50%;
+		background: white;
+		transition: 0.2s;
+	}
+	.switch.active {
+		background: #34c759;
+	}
+	.switch.active span {
+		transform: translateX(20px);
+	}
+</style>

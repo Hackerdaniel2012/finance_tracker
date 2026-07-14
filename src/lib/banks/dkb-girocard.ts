@@ -113,9 +113,9 @@ export const dkbAdapter: BankAdapter = {
 				payee: payee || undefined,
 				description,
 				searchText,
-				dedupeKey:
-					externalId ??
-					stableFingerprint([
+				dedupeKey: externalId
+					? buildDkbReferenceKey(externalId, bookingDate, valueDate, amountCents)
+					: stableFingerprint([
 						bookingDate,
 						valueDate,
 						amountCents,
@@ -142,6 +142,15 @@ export const dkbAdapter: BankAdapter = {
 		};
 	}
 };
+
+function buildDkbReferenceKey(
+	externalId: string,
+	bookingDate: string,
+	valueDate: string | undefined,
+	amountCents: number
+): string {
+	return `dkb_ref:${externalId}|${bookingDate}|${valueDate ?? ''}|${amountCents}`;
+}
 
 function applyDirection(amountCents: number, direction: string): number | undefined {
 	if (direction === 'Ausgang') {

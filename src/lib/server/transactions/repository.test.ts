@@ -10,10 +10,13 @@ import { createCategoryRule } from '../categories/repository';
 import type { DbClient } from '../db-client';
 import { confirmImport } from '../imports/confirm';
 import { sha256Hex } from '../imports/shared';
+import { reconcilePlans } from '../plans/matching';
+import { createPlan, getPlan } from '../plans/repository';
 import {
 	listTransactions,
 	listUnknownTransactions,
 	previewCategoryRule,
+	reclassifyTransactions,
 	updateTransaction
 } from './repository';
 
@@ -218,6 +221,302 @@ describe('transaction repository', () => {
 		await expect(
 			updateTransaction(db, { id: transaction?.id ?? '', categoryId: 'missing' })
 		).rejects.toThrow('Category not found');
+	});
+
+	it('does not persist category changes when rule validation fails', async () => {
+		const account = await createAccount(db, { name: 'Checking' });
+		const plan = await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-groceries',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1000,
+			nextDate: '2026-07-10'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,search_text)
+				VALUES ('invalid-rule',?,'cat-groceries','invalid-rule','2026-07-10',-1000,'')`
+			)
+			.bind(account.id)
+			.run();
+		await reconcilePlans(db);
+
+		await expect(
+			updateTransaction(db, {
+				id: 'invalid-rule',
+				categoryId: 'cat-leisure',
+				createRule: true
+			})
+		).rejects.toThrow('needs payee or search text');
+
+		expect(
+			firstValue<string>(sqlite, "SELECT category_id FROM transactions WHERE id = 'invalid-rule'")
+		).toBe('cat-groceries');
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT plan_id FROM plan_transactions WHERE transaction_id = 'invalid-rule'"
+			)
+		).toBe(plan.id);
+	});
+
+	it('keeps the plan but moves an invalid category match to one unique new plan', async () => {
+		const account = await createAccount(db, { name: 'Checking' });
+		const oldPlan = await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-groceries',
+			counterparty: 'Merchant',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1000,
+			nextDate: '2026-07-10'
+		});
+		const newPlan = await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-leisure',
+			counterparty: 'Merchant',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1000,
+			nextDate: '2026-07-10'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,payee,search_text)
+			 VALUES ('category-move',?,'cat-groceries','category-move','2026-07-10',-1000,'Merchant','Merchant')`
+			)
+			.bind(account.id)
+			.run();
+		await reconcilePlans(db);
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT plan_id FROM plan_transactions WHERE transaction_id='category-move'"
+			)
+		).toBe(oldPlan.id);
+
+		await updateTransaction(db, { id: 'category-move', categoryId: 'cat-leisure' });
+
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT plan_id FROM plan_transactions WHERE transaction_id='category-move'"
+			)
+		).toBe(newPlan.id);
+		expect(await getPlan(db, oldPlan.id)).toMatchObject({ status: 'active', transactionCount: 0 });
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM plans')).toBe(2);
+	});
+
+	it('restores a liability when a manual category makes its payment ineligible', async () => {
+		const account = await createAccount(db, { name: 'Checking' });
+		const plan = await createPlan(db, {
+			accountId: account.id,
+			counterparty: 'Loan Bank',
+			direction: 'expense',
+			cadence: 'monthly',
+			amountCents: 10000,
+			nextDate: '2026-07-10',
+			liability: {
+				name: 'Loan',
+				amountCents: 50000,
+				asOfDate: '2026-07-01',
+				annualInterestRateBps: 0
+			}
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,payee,search_text)
+			 VALUES ('loan-category',?,'cat-installment-plan','loan-category','2026-07-10',-10000,'Loan Bank','Loan Bank')`
+			)
+			.bind(account.id)
+			.run();
+		await reconcilePlans(db);
+		expect(firstValue<number>(sqlite, 'SELECT amount_cents FROM marked_liabilities')).toBe(40000);
+
+		await updateTransaction(db, { id: 'loan-category', categoryId: 'cat-leisure' });
+
+		expect(firstValue<number>(sqlite, 'SELECT amount_cents FROM marked_liabilities')).toBe(50000);
+		expect(await getPlan(db, plan.id)).toMatchObject({
+			status: 'active',
+			nextDate: '2026-07-10',
+			transactionCount: 0
+		});
+	});
+
+	it('leaves a changed transaction open when no or multiple plans match', async () => {
+		const account = await createAccount(db, { name: 'Checking' });
+		const oldPlan = await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-groceries',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1000,
+			nextDate: '2026-07-10'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,search_text)
+			 VALUES ('no-new-plan',?,'cat-groceries','no-new-plan','2026-07-10',-1000,'')`
+			)
+			.bind(account.id)
+			.run();
+		await reconcilePlans(db);
+		await updateTransaction(db, { id: 'no-new-plan', categoryId: 'cat-leisure' });
+		expect(
+			firstValue<number>(
+				sqlite,
+				"SELECT COUNT(*) FROM plan_transactions WHERE transaction_id='no-new-plan'"
+			)
+		).toBe(0);
+		expect((await getPlan(db, oldPlan.id))?.status).toBe('active');
+
+		await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-leisure',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 2000,
+			nextDate: '2026-07-11'
+		});
+		await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-leisure',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 2000,
+			nextDate: '2026-07-11'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,search_text)
+			 VALUES ('ambiguous-new-plan',?,'cat-groceries','ambiguous-new-plan','2026-07-11',-2000,'')`
+			)
+			.bind(account.id)
+			.run();
+		await updateTransaction(db, { id: 'ambiguous-new-plan', categoryId: 'cat-leisure' });
+		expect(
+			firstValue<number>(
+				sqlite,
+				"SELECT COUNT(*) FROM plan_transactions WHERE transaction_id='ambiguous-new-plan'"
+			)
+		).toBe(0);
+	});
+
+	it('retains automatic links for categoryless or equally categorized plans', async () => {
+		const account = await createAccount(db, { name: 'Checking' });
+		const categoryless = await createPlan(db, {
+			accountId: account.id,
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1000,
+			nextDate: '2026-07-10'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,search_text)
+			 VALUES ('categoryless-link',?,'cat-groceries','categoryless-link','2026-07-10',-1000,'')`
+			)
+			.bind(account.id)
+			.run();
+		await reconcilePlans(db);
+		await updateTransaction(db, { id: 'categoryless-link', categoryId: 'cat-leisure' });
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT plan_id FROM plan_transactions WHERE transaction_id='categoryless-link'"
+			)
+		).toBe(categoryless.id);
+
+		const sameCategory = await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-leisure',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 2000,
+			nextDate: '2026-07-11'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,search_text)
+			 VALUES ('same-category-link',?,'cat-leisure','same-category-link','2026-07-11',-2000,'')`
+			)
+			.bind(account.id)
+			.run();
+		await reconcilePlans(db);
+		await updateTransaction(db, { id: 'same-category-link', categoryId: 'cat-leisure' });
+		expect(
+			firstValue<string>(
+				sqlite,
+				"SELECT plan_id FROM plan_transactions WHERE transaction_id='same-category-link'"
+			)
+		).toBe(sameCategory.id);
+	});
+
+	it('rematches invalid links after bulk rule application and global reclassification', async () => {
+		const account = await createAccount(db, { name: 'Checking' });
+		const bulkPlan = await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-groceries',
+			counterparty: 'Cafe Central',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 500,
+			nextDate: '2026-07-10'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,payee,search_text,classification_status)
+			 VALUES ('bulk-target',?,'cat-groceries','bulk-target','2026-07-10',-500,'Cafe Central','Cafe Central','unknown'),
+			 ('bulk-source',?,NULL,'bulk-source','2026-07-11',-400,'Cafe','Cafe','unknown')`
+			)
+			.bind(account.id, account.id)
+			.run();
+		await reconcilePlans(db);
+		await updateTransaction(db, {
+			id: 'bulk-source',
+			categoryId: 'cat-leisure',
+			createRule: true,
+			applyRuleToExisting: true,
+			ruleName: 'Cafe bulk'
+		});
+		expect(
+			firstValue<number>(
+				sqlite,
+				"SELECT COUNT(*) FROM plan_transactions WHERE plan_id='" + bulkPlan.id + "'"
+			)
+		).toBe(0);
+
+		const globalPlan = await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-groceries',
+			counterparty: 'Global Shop',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 600,
+			nextDate: '2026-07-12'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (id,account_id,category_id,dedupe_key,booking_date,amount_cents,payee,search_text,classification_status)
+			 VALUES ('global-target',?,'cat-groceries','global-target','2026-07-12',-600,'Global Shop','Global Shop','auto')`
+			)
+			.bind(account.id)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO category_rules (id,category_id,name,field,operator,pattern,priority,is_global)
+			 VALUES ('global-leisure','cat-leisure','Global leisure','payee','equals','Global Shop',1,1)`
+			)
+			.run();
+		await reconcilePlans(db);
+		await reclassifyTransactions(db);
+		expect(
+			firstValue<number>(
+				sqlite,
+				"SELECT COUNT(*) FROM plan_transactions WHERE plan_id='" + globalPlan.id + "'"
+			)
+		).toBe(0);
 	});
 });
 

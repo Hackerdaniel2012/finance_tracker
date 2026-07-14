@@ -28,3 +28,4 @@ src/lib/paraglide
 project.inlang/cache/
 example_data/
 .playwright-mcp/
+SENSITIVE_HISTORY_REPORT.md

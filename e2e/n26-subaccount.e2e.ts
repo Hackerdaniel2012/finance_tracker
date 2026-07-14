@@ -6,12 +6,17 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 }) => {
 	const suffix = `${Date.now()}`;
 	const accountName = `E2E N26 ${suffix}`;
+	const navigate = async (path: string) => {
+		await page.goto(path);
+		await page.waitForLoadState('networkidle');
+	};
 
-	await page.goto('/');
+	await navigate('/accounts');
 	await expect(page.getByText(/^Ready$|^Bereit$/i)).toBeVisible();
 
 	await page.getByLabel(/account name|kontoname/i).fill(accountName);
-	await page.getByLabel(/institution/i).selectOption('N26');
+	await page.getByRole('button', { name: /institution/i }).click();
+	await page.getByRole('option', { name: 'N26', exact: true }).click();
 	const accountResponse = page.waitForResponse(
 		(response) => response.url().includes('/api/accounts') && response.request().method() === 'POST'
 	);
@@ -22,7 +27,7 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 	expect(createdAccount.account.id).toBeTruthy();
 	await expect(page.getByRole('heading', { name: accountName })).toBeVisible();
 
-	await page.goto('/imports');
+	await navigate('/imports');
 	await expect(page.getByText(/^Imports ready$|^Importe bereit$/i)).toBeVisible();
 	const importForm = page
 		.getByRole('button', { name: /preview import|import pruefen/i })
@@ -38,28 +43,33 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 	await expect(
 		page.getByRole('button', { name: /confirm import|import bestaetigen/i })
 	).toBeVisible({ timeout: 60_000 });
-	await expect(page.getByText(/Hauptkonto|20k in 2023/i).first()).toBeVisible();
+	await expect(page.getByText(/Main|Savings/i).first()).toBeVisible();
 
 	await page.getByRole('button', { name: /confirm import|import bestaetigen/i }).click();
-	await expect(page.getByRole('heading', { name: `${accountName} / n26` })).toBeVisible({
+	await expect(page.getByRole('heading', { name: `${accountName} / N26` })).toBeVisible({
 		timeout: 120_000
 	});
 	await expect(
 		page.getByRole('button', { name: /delete import|import loeschen/i }).first()
 	).toBeVisible();
 
-	await page.goto('/');
+	await navigate('/');
 	await expect(page.getByRole('heading', { name: /net worth|nettovermoegen/i })).toBeVisible();
 
-	const scopeSelect = page.getByLabel(/dashboard account|dashboard-konto/i);
-	await expect(scopeSelect).toContainText(`${accountName} - All`);
-	await expect(scopeSelect).toContainText(`${accountName} - Hauptkonto`);
-	await expect(scopeSelect).toContainText(`${accountName} - Haus Kostenstelle`);
+	const scopeSelect = page.getByRole('button', {
+		name: /dashboard account|dashboard-konto/i
+	});
+	await scopeSelect.click();
+	await expect(page.getByRole('option', { name: `${accountName} - All` })).toBeVisible();
+	await expect(page.getByRole('option', { name: `${accountName} - Main` })).toBeVisible();
+	await expect(page.getByRole('option', { name: `${accountName} - Savings` })).toBeVisible();
+	await scopeSelect.click();
 
 	const allScopeResponse = page.waitForResponse(
 		(response) => response.url().includes('/api/summary?accountId=') && response.ok()
 	);
-	await scopeSelect.selectOption({ label: `${accountName} - All` });
+	await scopeSelect.click();
+	await page.getByRole('option', { name: `${accountName} - All`, exact: true }).click();
 	const allScope = (await (await allScopeResponse).json()) as {
 		summary: { totals: { transactionCount: number } };
 	};
@@ -72,7 +82,8 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 			response.url().includes('subaccount=') &&
 			response.ok()
 	);
-	await scopeSelect.selectOption({ label: `${accountName} - Haus Kostenstelle` });
+	await scopeSelect.click();
+	await page.getByRole('option', { name: `${accountName} - Savings`, exact: true }).click();
 	const subaccountScope = (await (await subaccountScopeResponse).json()) as {
 		summary: { totals: { transactionCount: number } };
 	};
@@ -80,7 +91,7 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 	expect(scopedTransactionCount).toBeGreaterThan(0);
 	expect(scopedTransactionCount).toBeLessThan(allTransactionCount);
 
-	await page.goto('/transactions');
+	await navigate('/transactions');
 	await expect(page.getByRole('heading', { name: /transactions|transaktionen/i })).toBeVisible();
 	const allTransactionsResponse = page.waitForResponse(
 		(response) =>
@@ -105,7 +116,7 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 			response.url().includes('subaccount=') &&
 			response.ok()
 	);
-	await accountFilter.selectOption({ label: `${accountName} - Haus Kostenstelle` });
+	await accountFilter.selectOption({ label: `${accountName} - Savings` });
 	await page.getByRole('button', { name: /apply filters|filter anwenden/i }).click();
 	const subaccountTransactions = (await (await subaccountTransactionsResponse).json()) as {
 		transactions: unknown[];

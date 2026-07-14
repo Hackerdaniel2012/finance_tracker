@@ -1,4 +1,4 @@
-export type RecurringCadence = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
+export type RecurringCadence = 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
 export type RecurringStatus = 'suggested' | 'confirmed' | 'ignored';
 export type RecurringSource = 'manual' | 'imported' | 'confirmed_suggestion';
 export type RecurringDirection = 'incoming' | 'outgoing';
@@ -8,6 +8,7 @@ export interface RecurringEvidence {
 	bookingDate: string;
 	amountCents: number;
 	payee: string | null;
+	description: string | null;
 }
 
 export interface RecurringConfidenceFactors {
@@ -30,6 +31,7 @@ export interface RecurringGroup {
 	cadence: RecurringCadence;
 	expectedAmountCents: number;
 	nextDate: string | null;
+	endDate: string | null;
 	status: RecurringStatus;
 	confidence: number;
 	confidenceFactors: RecurringConfidenceFactors;
@@ -52,7 +54,20 @@ export interface UpdateRecurringGroupInput {
 	cadence?: RecurringCadence;
 	expectedAmountCents?: number;
 	nextDate?: string | null;
-	status?: RecurringStatus;
+	endDate?: string | null;
+	status?: Exclude<RecurringStatus, 'confirmed'>;
 	confidence?: number;
 	source?: RecurringSource;
 }
+
+export type ConfirmRecurringSuggestionInput = Omit<
+	UpdateRecurringGroupInput,
+	'status' | 'confidence' | 'source'
+> & {
+	liability?: {
+		name: string;
+		amountCents: number;
+		asOfDate: string;
+		annualInterestRateBps: number;
+	};
+};

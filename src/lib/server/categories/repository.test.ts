@@ -26,7 +26,7 @@ describe('category repository', () => {
 	it('lists seeded categories in sort order', async () => {
 		const categories = await listCategories(db);
 
-		expect(categories).toHaveLength(13);
+		expect(categories).toHaveLength(17);
 		expect(categories[0]).toMatchObject({
 			id: 'cat-income',
 			name: 'Income',
@@ -35,6 +35,30 @@ describe('category repository', () => {
 			sortOrder: 10
 		});
 		expect(categories.at(-1)).toMatchObject({ id: 'cat-unknown', type: 'unknown' });
+		expect(categories).toContainEqual(
+			expect.objectContaining({ id: 'cat-vehicles', name: 'Vehicles', type: 'expense' })
+		);
+		expect(categories).toContainEqual(
+			expect.objectContaining({ id: 'cat-development', name: 'Development', type: 'expense' })
+		);
+		expect(categories).toContainEqual(
+			expect.objectContaining({
+				id: 'cat-telecommunications',
+				name: 'Telecommunications',
+				type: 'expense'
+			})
+		);
+		expect(categories).toContainEqual(
+			expect.objectContaining({ id: 'cat-shopping', name: 'Shopping', type: 'expense' })
+		);
+		expect(categories).toContainEqual(
+			expect.objectContaining({
+				id: 'cat-installment-plan',
+				name: 'Installment plan',
+				type: 'expense'
+			})
+		);
+		expect(categories).not.toContainEqual(expect.objectContaining({ id: 'cat-subscriptions' }));
 	});
 
 	it('creates and updates editable categories', async () => {

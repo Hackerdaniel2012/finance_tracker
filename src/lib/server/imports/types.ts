@@ -1,4 +1,5 @@
 import type { BankId, NormalizedTransaction, ParseError } from '$lib/banks';
+import type { DuplicateImportRow } from './deduplication';
 
 export interface ImportPreviewInput {
 	accountId: string;
@@ -20,6 +21,7 @@ export interface ImportPreview {
 	};
 	metadata: Record<string, string>;
 	sampleRows: NormalizedTransaction[];
+	duplicateRows: DuplicateImportRow[];
 	errors: ParseError[];
 }
 
