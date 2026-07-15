@@ -27,6 +27,9 @@
 		id: string;
 		accountId: string;
 		accountName: string;
+		kind: 'standard' | 'combined_import';
+		subaccount: string | null;
+		combineBeforeDate: string | null;
 		categoryId: string | null;
 		categoryName: string | null;
 		bookingDate: string;
@@ -39,6 +42,26 @@
 		classificationStatus: TransactionClassificationStatus;
 		tags: Array<{ id: string; name: string; color: string | null }>;
 		reviewFlag: { id: string; reason: string; status: string } | null;
+	}
+
+	function transactionPayee(transaction: Transaction): string {
+		if (transaction.kind === 'combined_import' && transaction.combineBeforeDate) {
+			return m.combined_balance_before({ date: formatDate(transaction.combineBeforeDate) });
+		}
+		return transaction.payee ?? m.not_available();
+	}
+
+	function transactionDescription(transaction: Transaction): string {
+		if (transaction.kind === 'combined_import') {
+			return transaction.subaccount ?? m.default_subaccount();
+		}
+		return transaction.description ?? m.not_available();
+	}
+
+	function transactionAccount(transaction: Transaction): string {
+		return transaction.subaccount
+			? `${transaction.accountName} / ${transaction.subaccount}`
+			: transaction.accountName;
 	}
 
 	interface TransactionListResult {
@@ -481,14 +504,14 @@
 									</td>
 									<td class="min-w-64 px-4 py-3">
 										<p class="font-medium text-zinc-950">
-											{transaction.payee ?? m.not_available()}
+											{transactionPayee(transaction)}
 										</p>
 										<p class="mt-1 line-clamp-2 text-xs text-zinc-500">
-											{transaction.description ?? m.not_available()}
+											{transactionDescription(transaction)}
 										</p>
 									</td>
 									<td class="whitespace-nowrap px-4 py-3 text-zinc-700">
-										{transaction.accountName}
+										{transactionAccount(transaction)}
 									</td>
 									<td class="whitespace-nowrap px-4 py-3 text-zinc-700">
 										{transaction.categoryName ?? m.uncategorized()}
@@ -517,49 +540,51 @@
 			<h2 class="text-lg font-semibold text-zinc-950">{m.edit_transaction()}</h2>
 			{#if selected}
 				<div class="mt-4 rounded border border-zinc-200 bg-zinc-50 p-4 text-sm">
-					<p class="font-medium text-zinc-950">{selected.payee ?? m.not_available()}</p>
+					<p class="font-medium text-zinc-950">{transactionPayee(selected)}</p>
 					<p class="mt-1 text-zinc-600">
 						{formatDate(selected.bookingDate)} / {centsToEuros(selected.amountCents)}
 					</p>
 				</div>
-				<form class="mt-5 grid gap-4" onsubmit={saveTransaction}>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.category()}</span>
-						<select class="w-full rounded border-zinc-300" bind:value={editCategoryId}>
-							<option value="">{m.uncategorized()}</option>
-							{#each categories as category (category.id)}
-								<option value={category.id}>{category.name}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.notes()}</span>
-						<textarea class="w-full rounded border-zinc-300" rows="3" bind:value={editNote}
-						></textarea>
-					</label>
-					<label class="grid gap-1 text-sm font-medium text-zinc-700">
-						<span>{m.tags()}</span>
-						<input class="w-full rounded border-zinc-300" bind:value={editTags} />
-						<span class="text-xs font-normal text-zinc-500">{m.tag_help()}</span>
-					</label>
-					<label class="flex items-center gap-2 text-sm font-medium text-zinc-700">
-						<input class="rounded border-zinc-300" type="checkbox" bind:checked={createRule} />
-						<span>{m.create_rule_from_edit()}</span>
-					</label>
-					{#if createRule}
+				{#if selected.kind === 'combined_import'}
+					<p class="mt-4 text-sm text-zinc-600">{m.combined_transaction_read_only()}</p>
+				{:else}<form class="mt-5 grid gap-4" onsubmit={saveTransaction}>
 						<label class="grid gap-1 text-sm font-medium text-zinc-700">
-							<span>{m.rule_name()}</span>
-							<input class="w-full rounded border-zinc-300" bind:value={ruleName} />
+							<span>{m.category()}</span>
+							<select class="w-full rounded border-zinc-300" bind:value={editCategoryId}>
+								<option value="">{m.uncategorized()}</option>
+								{#each categories as category (category.id)}
+									<option value={category.id}>{category.name}</option>
+								{/each}
+							</select>
 						</label>
-					{/if}
-					<button
+						<label class="grid gap-1 text-sm font-medium text-zinc-700">
+							<span>{m.notes()}</span>
+							<textarea class="w-full rounded border-zinc-300" rows="3" bind:value={editNote}
+							></textarea>
+						</label>
+						<label class="grid gap-1 text-sm font-medium text-zinc-700">
+							<span>{m.tags()}</span>
+							<input class="w-full rounded border-zinc-300" bind:value={editTags} />
+							<span class="text-xs font-normal text-zinc-500">{m.tag_help()}</span>
+						</label>
+						<label class="flex items-center gap-2 text-sm font-medium text-zinc-700">
+							<input class="rounded border-zinc-300" type="checkbox" bind:checked={createRule} />
+							<span>{m.create_rule_from_edit()}</span>
+						</label>
+						{#if createRule}
+							<label class="grid gap-1 text-sm font-medium text-zinc-700">
+								<span>{m.rule_name()}</span>
+								<input class="w-full rounded border-zinc-300" bind:value={ruleName} />
+							</label>
+						{/if}
+						<button
 							class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
-						type="submit"
-						disabled={isSaving}
-					>
-						{m.save_transaction()}
-					</button>
-				</form>
+							type="submit"
+							disabled={isSaving}
+						>
+							{m.save_transaction()}
+						</button>
+					</form>{/if}
 			{:else}
 				<p class="mt-4 text-sm leading-6 text-zinc-600">{m.select_transaction()}</p>
 			{/if}

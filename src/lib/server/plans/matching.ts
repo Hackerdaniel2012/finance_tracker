@@ -36,6 +36,7 @@ export async function reconcilePlans(db: DbClient): Promise<void> {
 				FROM transactions t
 				LEFT JOIN plan_transactions pt ON pt.transaction_id = t.id
 				WHERE pt.transaction_id IS NULL
+					AND t.kind = 'standard'
 				ORDER BY t.booking_date, t.id`
 			)
 			.all<TransactionRow>()

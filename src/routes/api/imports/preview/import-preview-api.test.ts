@@ -21,20 +21,24 @@ beforeEach(async () => {
 describe('/api/imports/preview', () => {
 	it('returns an import preview for multipart CSV uploads', async () => {
 		const account = await createAccount(db, { name: 'DKB Giro' });
-		const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 		const csv = await readFile(resolve('tests/fixtures/dkb-giro-basic.csv'), 'utf8');
 
-		const response = await POST(event(form(account.id, csv)));
+		const response = await POST(event(form(account.id, csv, '2026-07-03')));
 
 		await expect(response.json()).resolves.toMatchObject({
 			preview: {
 				accountId: account.id,
 				adapterId: 'dkb_girocard',
+				combineBeforeDate: '2026-07-03',
 				summary: {
 					errorCount: 0,
 					duplicateEstimate: 0,
 					startDate: '2026-07-01',
-					endDate: '2026-07-03'
+					endDate: '2026-07-03',
+					combinedSourceCount: 2,
+					combinedRecordCount: 1,
+					detailedImportCount: 1,
+					effectiveImportCount: 2
 				}
 			}
 		});
@@ -53,10 +57,11 @@ describe('/api/imports/preview', () => {
 	});
 });
 
-function form(accountId: string, csv?: string): FormData {
+function form(accountId: string, csv?: string, combineBeforeDate?: string): FormData {
 	const data = new FormData();
 	data.set('accountId', accountId);
 	data.set('adapterId', 'dkb_girocard');
+	if (combineBeforeDate) data.set('combineBeforeDate', combineBeforeDate);
 
 	if (csv !== undefined) {
 		data.set('file', new Blob([csv], { type: 'text/csv' }), 'bank.csv');

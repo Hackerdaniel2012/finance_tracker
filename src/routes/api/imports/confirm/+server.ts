@@ -10,6 +10,7 @@ export const POST: RequestHandler = async (event) => {
 		const accountId = getFormString(form, 'accountId');
 		const adapterId = getFormString(form, 'adapterId');
 		const expectedHash = getFormString(form, 'expectedHash');
+		const combineBeforeDate = getOptionalFormString(form, 'combineBeforeDate');
 		const file = form.get('file');
 
 		if (!(file instanceof Blob)) {
@@ -20,7 +21,8 @@ export const POST: RequestHandler = async (event) => {
 			accountId,
 			adapterId,
 			expectedHash,
-			csv: await file.text()
+			csv: await file.text(),
+			combineBeforeDate
 		});
 
 		return json({ report }, { status: 201 });
@@ -35,6 +37,13 @@ async function readFormData(request: Request): Promise<FormData> {
 	} catch {
 		throw new ValidationError('Request body must be multipart form data');
 	}
+}
+
+function getOptionalFormString(form: FormData, field: string): string | null {
+	const value = form.get(field);
+	if (value === null || value === '') return null;
+	if (typeof value !== 'string') throw new ValidationError(`${field} must be a string`);
+	return value.trim() || null;
 }
 
 function getFormString(form: FormData, field: string): string {

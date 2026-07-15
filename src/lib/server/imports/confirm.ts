@@ -15,13 +15,18 @@ import { reconcilePlans } from '../plans/matching';
 import { getDateRange, sha256Hex } from './shared';
 import { getExistingTransactionsByDedupeKey, partitionImportRows } from './deduplication';
 import type { ConfirmImportInput, ImportReport } from './types';
+import { combineImportRows, parseCombineBeforeDate, type CombinedImportGroup } from './combination';
 
+// Each fingerprint row binds account, batch, and dedupe key.
+// Thirty rows stay comfortably below D1's per-statement bound-parameter limit.
+const fingerprintInsertChunkSize = 30;
 
 export async function confirmImport(
 	db: DbClient,
 	input: ConfirmImportInput
 ): Promise<ImportReport> {
 	const accountId = input.accountId.trim();
+	const combineBeforeDate = parseCombineBeforeDate(input.combineBeforeDate);
 	if (!accountId) {
 		throw new ValidationError('accountId is required');
 	}
@@ -56,6 +61,7 @@ export async function confirmImport(
 		parsed.rows.map((row) => row.dedupeKey)
 	);
 	const insertableRows = partitionImportRows(parsed.rows, existingTransactions);
+	const combination = combineImportRows(insertableRows.rows, combineBeforeDate);
 	const rules = await listCategoryRules(db);
 	let unknownCount = 0;
 
@@ -68,13 +74,17 @@ export async function confirmImport(
 			startDate,
 			endDate,
 			rowCount: parsed.rows.length,
-			importedCount: insertableRows.rows.length,
+			importedCount: combination.detailedRows.length + combination.combinedGroups.length,
 			duplicateCount: insertableRows.duplicates.length,
-			errorCount: parsed.errors.length
+			errorCount: parsed.errors.length,
+			combineBeforeDate,
+			combinedSourceCount: combination.combinedSourceCount,
+			combinedRecordCount: combination.combinedGroups.length,
+			detailedImportCount: combination.detailedRows.length
 		})
 	];
 
-	for (const row of insertableRows.rows) {
+	for (const row of combination.detailedRows) {
 		const match = matchCategoryRule(row, rules);
 		const transactionId = crypto.randomUUID();
 		const classificationStatus = match ? 'auto' : 'unknown';
@@ -99,6 +109,27 @@ export async function confirmImport(
 		}
 	}
 
+	for (const [index, group] of combination.combinedGroups.entries()) {
+		writeStatements.push(
+			insertCombinedTransactionStatement(db, {
+				transactionId: crypto.randomUUID(),
+				accountId: account.id,
+				batchId,
+				dedupeKey: `combined_import:${batchId}:${index}`,
+				group
+			})
+		);
+	}
+
+	writeStatements.push(
+		...insertFingerprintStatements(
+			db,
+			account.id,
+			batchId,
+			combination.combinedGroups.flatMap((group) => group.dedupeKeys)
+		)
+	);
+
 	for (const error of parsed.errors) {
 		writeStatements.push(insertRowErrorStatement(db, batchId, error));
 	}
@@ -112,13 +143,17 @@ export async function confirmImport(
 		accountId: account.id,
 		adapterId: adapter.id,
 		fileHash,
+		combineBeforeDate,
 		startDate,
 		endDate,
 		rowCount: parsed.rows.length,
-		importedCount: insertableRows.rows.length,
+		importedCount: combination.detailedRows.length + combination.combinedGroups.length,
 		duplicateCount: insertableRows.duplicates.length,
 		errorCount: parsed.errors.length,
-		unknownCount
+		unknownCount,
+		combinedSourceCount: combination.combinedSourceCount,
+		combinedRecordCount: combination.combinedGroups.length,
+		detailedImportCount: combination.detailedRows.length
 	};
 }
 
@@ -150,7 +185,6 @@ async function assertNewFileHash(db: DbClient, accountId: string, fileHash: stri
 	}
 }
 
-
 function createBatchStatement(
 	db: DbClient,
 	input: {
@@ -164,14 +198,19 @@ function createBatchStatement(
 		importedCount: number;
 		duplicateCount: number;
 		errorCount: number;
+		combineBeforeDate: string | null;
+		combinedSourceCount: number;
+		combinedRecordCount: number;
+		detailedImportCount: number;
 	}
 ): DbStatement {
 	return db
 		.prepare(
 			`INSERT INTO import_batches (
 				id, account_id, file_hash, adapter_id, start_date, end_date,
-				row_count, imported_count, duplicate_count, error_count
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				row_count, imported_count, duplicate_count, error_count, combine_before_date,
+				combined_source_count, combined_record_count, detailed_import_count
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		)
 		.bind(
 			input.batchId,
@@ -183,8 +222,62 @@ function createBatchStatement(
 			input.rowCount,
 			input.importedCount,
 			input.duplicateCount,
-			input.errorCount
+			input.errorCount,
+			input.combineBeforeDate,
+			input.combinedSourceCount,
+			input.combinedRecordCount,
+			input.detailedImportCount
 		);
+}
+
+function insertCombinedTransactionStatement(
+	db: DbClient,
+	input: {
+		transactionId: string;
+		accountId: string;
+		batchId: string;
+		dedupeKey: string;
+		group: CombinedImportGroup;
+	}
+): DbStatement {
+	return db
+		.prepare(
+			`INSERT INTO transactions (
+				id, account_id, import_batch_id, dedupe_key, booking_date, amount_cents,
+				currency, search_text, classification_status, subaccount, kind
+			) VALUES (?, ?, ?, ?, ?, ?, 'EUR', '', 'ignored', ?, 'combined_import')`
+		)
+		.bind(
+			input.transactionId,
+			input.accountId,
+			input.batchId,
+			input.dedupeKey,
+			input.group.bookingDate,
+			input.group.amountCents,
+			input.group.subaccount
+		);
+}
+
+function insertFingerprintStatements(
+	db: DbClient,
+	accountId: string,
+	batchId: string,
+	dedupeKeys: string[]
+): DbStatement[] {
+	const statements: DbStatement[] = [];
+	for (let index = 0; index < dedupeKeys.length; index += fingerprintInsertChunkSize) {
+		const chunk = dedupeKeys.slice(index, index + fingerprintInsertChunkSize);
+		const values = chunk.map(() => '(?, ?, ?)').join(', ');
+		statements.push(
+			db
+				.prepare(
+					`INSERT INTO import_source_fingerprints (account_id, import_batch_id, dedupe_key)
+					VALUES ${values}`
+				)
+				.bind(...chunk.flatMap((dedupeKey) => [accountId, batchId, dedupeKey]))
+		);
+	}
+	return statements;
 }
 
 function insertTransactionStatement(
@@ -272,7 +365,6 @@ function matchCategoryRule(
 		)
 	);
 }
-
 
 interface IdRow extends DbRow {
 	id: string;

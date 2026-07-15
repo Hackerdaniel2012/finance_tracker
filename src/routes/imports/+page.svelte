@@ -3,6 +3,7 @@
 	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { onMount } from 'svelte';
 	import Picker from '$lib/components/Picker.svelte';
+	import DatePicker from '$lib/components/DatePicker.svelte';
 
 	type BankId = 'n26' | 'trade_republic' | 'dkb_girocard' | 'dkb_creditcard';
 
@@ -25,7 +26,15 @@
 		dedupeKey: string;
 		source: {
 			rowNumber: number;
+			subaccount?: string;
 		};
+	}
+
+	interface CombinedImportRow {
+		subaccount: string | null;
+		bookingDate: string;
+		amountCents: number;
+		sourceRowCount: number;
 	}
 
 	interface ExistingDuplicateTransaction {
@@ -46,6 +55,7 @@
 		accountId: string;
 		adapterId: BankId;
 		fileHash: string;
+		combineBeforeDate: string | null;
 		summary: {
 			parsedRows: number;
 			skippedRows: number;
@@ -53,8 +63,13 @@
 			duplicateEstimate: number;
 			startDate: string | null;
 			endDate: string | null;
+			combinedSourceCount: number;
+			combinedRecordCount: number;
+			detailedImportCount: number;
+			effectiveImportCount: number;
 		};
 		sampleRows: NormalizedTransaction[];
+		combinedRows: CombinedImportRow[];
 		duplicateRows: DuplicateImportRow[];
 		errors: Array<{ rowNumber: number; code: string; message: string }>;
 	}
@@ -64,6 +79,7 @@
 		accountId: string;
 		adapterId: BankId;
 		fileHash: string;
+		combineBeforeDate: string | null;
 		startDate: string | null;
 		endDate: string | null;
 		rowCount: number;
@@ -71,6 +87,9 @@
 		duplicateCount: number;
 		errorCount: number;
 		unknownCount: number;
+		combinedSourceCount: number;
+		combinedRecordCount: number;
+		detailedImportCount: number;
 	}
 
 	interface ImportBatch {
@@ -84,6 +103,10 @@
 		importedCount: number;
 		duplicateCount: number;
 		errorCount: number;
+		combineBeforeDate: string | null;
+		combinedSourceCount: number;
+		combinedRecordCount: number;
+		detailedImportCount: number;
 		createdAt: string;
 	}
 
@@ -93,6 +116,8 @@
 	let selectedAccountId = $state('');
 	let selectedAdapterId = $state<BankId | ''>('');
 	let selectedFile = $state<File | null>(null);
+	let combineBeforeDate = $state('');
+	let previousCombineBeforeDate = '';
 	let preview = $state<ImportPreview | null>(null);
 	let report = $state<ImportReport | null>(null);
 	let status = $state(m.import_status_loading());
@@ -109,11 +134,20 @@
 			selectedFile !== null &&
 			!isConfirming &&
 			preview.accountId === selectedAccountId &&
-			preview.adapterId === selectedAdapterId
+			preview.adapterId === selectedAdapterId &&
+			preview.combineBeforeDate === (combineBeforeDate || null)
 	);
 
 	onMount(() => {
 		void loadImportState();
+	});
+
+	$effect(() => {
+		const currentCombineBeforeDate = combineBeforeDate;
+		if (currentCombineBeforeDate === previousCombineBeforeDate) return;
+		previousCombineBeforeDate = currentCombineBeforeDate;
+		preview = null;
+		report = null;
 	});
 
 	async function loadImportState() {
@@ -223,6 +257,7 @@
 		form.set('accountId', selectedAccountId);
 		form.set('adapterId', selectedAdapterId);
 		form.set('file', selectedFile);
+		if (combineBeforeDate) form.set('combineBeforeDate', combineBeforeDate);
 		return form;
 	}
 
@@ -300,6 +335,18 @@
 					required
 				/>
 			</label>
+			<div class="grid gap-1 text-sm font-medium text-zinc-700">
+				<span>{m.combine_before()}</span>
+				<DatePicker
+					ariaLabel={m.combine_before()}
+					todayLabel={m.today()}
+					clearLabel={m.clear()}
+					previousMonthLabel={m.previous_month()}
+					nextMonthLabel={m.next_month()}
+					bind:value={combineBeforeDate}
+				/>
+				<p class="text-xs font-normal leading-5 text-zinc-500">{m.combine_before_help()}</p>
+			</div>
 			<button
 				class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 				type="submit"
@@ -356,30 +403,78 @@
 							{formatDate(preview.summary.startDate)} - {formatDate(preview.summary.endDate)}
 						</p>
 					</article>
+					<article class="rounded-ui border border-zinc-200 p-4">
+						<p class="text-sm text-zinc-500">{m.combined_source_rows()}</p>
+						<p class="mt-1 text-2xl font-semibold">{preview.summary.combinedSourceCount}</p>
+					</article>
+					<article class="rounded-ui border border-zinc-200 p-4">
+						<p class="text-sm text-zinc-500">{m.combined_records()}</p>
+						<p class="mt-1 text-2xl font-semibold">{preview.summary.combinedRecordCount}</p>
+					</article>
+					<article class="rounded-ui border border-zinc-200 p-4">
+						<p class="text-sm text-zinc-500">{m.detailed_import_rows()}</p>
+						<p class="mt-1 text-2xl font-semibold">{preview.summary.detailedImportCount}</p>
+					</article>
+					<article class="rounded-ui border border-zinc-200 p-4">
+						<p class="text-sm text-zinc-500">{m.effective_import_rows()}</p>
+						<p class="mt-1 text-2xl font-semibold">{preview.summary.effectiveImportCount}</p>
+					</article>
 				</div>
 
-				<div class="mt-6 overflow-x-auto">
-					<table class="min-w-full divide-y divide-zinc-200 text-left text-sm">
-						<thead class="text-xs uppercase text-zinc-500">
-							<tr>
-								<th class="px-3 py-2">{m.date()}</th>
-								<th class="px-3 py-2">{m.payee()}</th>
-								<th class="px-3 py-2">{m.description()}</th>
-								<th class="px-3 py-2 text-right">{m.amount()}</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-zinc-100">
-							{#each preview.sampleRows as row (row.dedupeKey)}
+				{#if preview.combinedRows.length > 0}
+					<div class="mt-6 rounded border border-blue-200 bg-blue-50 p-4">
+						<h3 class="text-sm font-semibold text-blue-950">{m.combined_preview_title()}</h3>
+						<p class="mt-1 text-sm text-blue-900">{m.combined_preview_description()}</p>
+						<div class="mt-4 overflow-x-auto">
+							<table class="min-w-full divide-y divide-blue-200 text-left text-sm">
+								<thead class="text-xs uppercase text-blue-800">
+									<tr>
+										<th class="px-3 py-2">{m.subaccount()}</th>
+										<th class="px-3 py-2">{m.date()}</th>
+										<th class="px-3 py-2 text-right">{m.source_rows()}</th>
+										<th class="px-3 py-2 text-right">{m.amount()}</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-blue-100 text-blue-950">
+									{#each preview.combinedRows as row (`${row.subaccount ?? ''}-${row.bookingDate}`)}
+										<tr>
+											<td class="px-3 py-2">{row.subaccount || m.default_subaccount()}</td>
+											<td class="px-3 py-2">{formatDate(row.bookingDate)}</td>
+											<td class="px-3 py-2 text-right">{row.sourceRowCount}</td>
+											<td class="px-3 py-2 text-right font-medium"
+												>{centsToEuros(row.amountCents)}</td
+											>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				{/if}
+
+				{#if preview.sampleRows.length > 0}<div class="mt-6 overflow-x-auto">
+						<table class="min-w-full divide-y divide-zinc-200 text-left text-sm">
+							<thead class="text-xs uppercase text-zinc-500">
 								<tr>
-									<td class="px-3 py-2">{formatDate(row.bookingDate)}</td>
-									<td class="px-3 py-2">{row.payee || m.not_available()}</td>
-									<td class="px-3 py-2">{row.description || m.not_available()}</td>
-									<td class="px-3 py-2 text-right font-medium">{centsToEuros(row.amountCents)}</td>
+									<th class="px-3 py-2">{m.date()}</th>
+									<th class="px-3 py-2">{m.payee()}</th>
+									<th class="px-3 py-2">{m.description()}</th>
+									<th class="px-3 py-2 text-right">{m.amount()}</th>
 								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
+							</thead>
+							<tbody class="divide-y divide-zinc-100">
+								{#each preview.sampleRows as row (row.dedupeKey)}
+									<tr>
+										<td class="px-3 py-2">{formatDate(row.bookingDate)}</td>
+										<td class="px-3 py-2">{row.payee || m.not_available()}</td>
+										<td class="px-3 py-2">{row.description || m.not_available()}</td>
+										<td class="px-3 py-2 text-right font-medium">{centsToEuros(row.amountCents)}</td
+										>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>{/if}
 
 				{#if preview.duplicateRows.length > 0}
 					<div class="mt-6 rounded border border-amber-200 bg-amber-50 p-4">
@@ -453,8 +548,17 @@
 		{#if report}
 			<section class="rounded border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
 				<h2 class="text-lg font-semibold text-emerald-950">{m.import_report_title()}</h2>
-				<div class="mt-4 grid gap-3 sm:grid-cols-4">
+				<div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
 					<p class="text-sm text-emerald-900">{m.imported_rows()}: {report.importedCount}</p>
+					<p class="text-sm text-emerald-900">
+						{m.combined_source_rows()}: {report.combinedSourceCount}
+					</p>
+					<p class="text-sm text-emerald-900">
+						{m.combined_records()}: {report.combinedRecordCount}
+					</p>
+					<p class="text-sm text-emerald-900">
+						{m.detailed_import_rows()}: {report.detailedImportCount}
+					</p>
 					<p class="text-sm text-emerald-900">{m.duplicate_rows()}: {report.duplicateCount}</p>
 					<p class="text-sm text-emerald-900">{m.parse_errors()}: {report.errorCount}</p>
 					<p class="text-sm text-emerald-900">{m.unknown_transactions()}: {report.unknownCount}</p>
@@ -485,6 +589,10 @@
 									{m.imported_rows()}: {batch.importedCount} / {m.duplicate_rows()}:
 									{batch.duplicateCount}
 								</p>
+								{#if batch.combineBeforeDate}<p>
+										{m.combine_before()}: {formatDate(batch.combineBeforeDate)} / {m.combined_source_rows()}:
+										{batch.combinedSourceCount}
+									</p>{/if}
 								<button
 									class="h-11 rounded border border-red-200 px-3 text-sm font-medium text-red-700 disabled:opacity-50"
 									type="button"

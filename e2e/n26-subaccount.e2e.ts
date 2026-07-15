@@ -36,6 +36,8 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 	await page.getByRole('option', { name: accountName }).click();
 	await importForm.getByRole('button', { name: /csv scheme|csv-schema/i }).click();
 	await page.getByRole('option', { name: 'N26' }).click();
+	await importForm.getByRole('button', { name: /combine before|zusammenfassen vor/i }).click();
+	await page.getByRole('button', { name: /07\/03\/2026|03\.07\.2026/ }).click();
 	await importForm
 		.getByLabel(/csv file|csv-datei/i)
 		.setInputFiles(resolve('tests/fixtures/n26-basic.csv'));
@@ -44,6 +46,7 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 		page.getByRole('button', { name: /confirm import|import bestaetigen/i })
 	).toBeVisible({ timeout: 60_000 });
 	await expect(page.getByText(/Main|Savings/i).first()).toBeVisible();
+	await expect(page.getByText(/rows combined|zusammengefasste zeilen/i).first()).toBeVisible();
 
 	await page.getByRole('button', { name: /confirm import|import bestaetigen/i }).click();
 	await expect(page.getByRole('heading', { name: `${accountName} / N26` })).toBeVisible({
@@ -104,10 +107,17 @@ test('imports n26-basic.csv and scopes dashboard and transactions by subaccount'
 	await accountFilter.selectOption({ label: `${accountName} - All` });
 	await page.getByRole('button', { name: /apply filters|filter anwenden/i }).click();
 	const allTransactions = (await (await allTransactionsResponse).json()) as {
-		transactions: unknown[];
+		transactions: Array<{ kind: string; bookingDate: string; combineBeforeDate: string | null }>;
 		pagination: { total: number };
 	};
 	expect(allTransactions.pagination.total).toBeGreaterThan(0);
+	expect(allTransactions.transactions).toContainEqual(
+		expect.objectContaining({
+			kind: 'combined_import',
+			bookingDate: '2026-07-02',
+			combineBeforeDate: '2026-07-03'
+		})
+	);
 
 	const subaccountTransactionsResponse = page.waitForResponse(
 		(response) =>

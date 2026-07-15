@@ -62,6 +62,9 @@ export async function updateTransaction(
 	if (!existing) {
 		throw new NotFoundError('Transaction not found');
 	}
+	if (existing.kind === 'combined_import') {
+		throw new ValidationError('Combined import transactions are read-only');
+	}
 
 	if (input.categoryId !== undefined && input.categoryId !== null) {
 		await assertCategoryExists(db, input.categoryId);
@@ -148,6 +151,9 @@ function baseTransactionSelect(): string {
 		t.id,
 		t.account_id,
 		a.name AS account_name,
+		t.kind,
+		t.subaccount,
+		b.combine_before_date,
 		t.import_batch_id,
 		t.category_id,
 		c.name AS category_name,
@@ -172,6 +178,7 @@ function baseTransactionSelect(): string {
 		t.updated_at
 	FROM transactions t
 	INNER JOIN accounts a ON a.id = t.account_id
+	LEFT JOIN import_batches b ON b.id = t.import_batch_id
 	LEFT JOIN categories c ON c.id = t.category_id
 	LEFT JOIN transaction_review_flags r ON r.transaction_id = t.id AND r.status = 'open'`;
 }
@@ -616,6 +623,9 @@ function mapTransaction(row: TransactionRow, tags: TransactionTag[]): Transactio
 		id: row.id,
 		accountId: row.account_id,
 		accountName: row.account_name,
+		kind: row.kind,
+		subaccount: row.subaccount,
+		combineBeforeDate: row.combine_before_date,
 		importBatchId: row.import_batch_id,
 		categoryId: row.category_id,
 		categoryName: row.category_name,
@@ -655,6 +665,9 @@ interface TransactionRow extends DbRow {
 	id: string;
 	account_id: string;
 	account_name: string;
+	kind: Transaction['kind'];
+	subaccount: string | null;
+	combine_before_date: string | null;
 	import_batch_id: string | null;
 	category_id: string | null;
 	category_name: string | null;

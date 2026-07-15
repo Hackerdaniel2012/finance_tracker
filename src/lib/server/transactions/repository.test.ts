@@ -30,6 +30,32 @@ beforeEach(async () => {
 });
 
 describe('transaction repository', () => {
+	it('exposes combined import metadata and rejects edits to combined records', async () => {
+		const account = await createAccount(db, { name: 'DKB Giro' });
+		const csv = dkbCsv([
+			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Old";"Ausgang";"DE";"12,34";"";"";"combined-source"'
+		]);
+		await confirmImport(db, {
+			accountId: account.id,
+			adapterId: 'dkb_girocard',
+			csv,
+			expectedHash: await sha256Hex(csv),
+			combineBeforeDate: '2026-07-09'
+		});
+
+		const [combined] = (await listTransactions(db, baseFilters())).transactions;
+		expect(combined).toMatchObject({
+			kind: 'combined_import',
+			subaccount: null,
+			combineBeforeDate: '2026-07-09',
+			bookingDate: '2026-07-08',
+			classificationStatus: 'ignored'
+		});
+		await expect(updateTransaction(db, { id: combined?.id ?? '', note: 'change' })).rejects.toThrow(
+			'Combined import transactions are read-only'
+		);
+	});
+
 	it('lists transactions with filters, sorting, pagination, and tags', async () => {
 		await seedTransactions();
 		const firstPage = await listTransactions(db, {

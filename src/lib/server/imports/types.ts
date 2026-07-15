@@ -5,12 +5,21 @@ export interface ImportPreviewInput {
 	accountId: string;
 	adapterId: string;
 	csv: string;
+	combineBeforeDate?: string | null;
+}
+
+export interface CombinedImportRow {
+	subaccount: string | null;
+	bookingDate: string;
+	amountCents: number;
+	sourceRowCount: number;
 }
 
 export interface ImportPreview {
 	accountId: string;
 	adapterId: BankId;
 	fileHash: string;
+	combineBeforeDate: string | null;
 	summary: {
 		parsedRows: number;
 		skippedRows: number;
@@ -18,9 +27,14 @@ export interface ImportPreview {
 		duplicateEstimate: number;
 		startDate: string | null;
 		endDate: string | null;
+		combinedSourceCount: number;
+		combinedRecordCount: number;
+		detailedImportCount: number;
+		effectiveImportCount: number;
 	};
 	metadata: Record<string, string>;
 	sampleRows: NormalizedTransaction[];
+	combinedRows: CombinedImportRow[];
 	duplicateRows: DuplicateImportRow[];
 	errors: ParseError[];
 }
@@ -30,6 +44,7 @@ export interface ConfirmImportInput {
 	adapterId: string;
 	csv: string;
 	expectedHash: string;
+	combineBeforeDate?: string | null;
 }
 
 export interface ImportReport {
@@ -37,6 +52,7 @@ export interface ImportReport {
 	accountId: string;
 	adapterId: BankId;
 	fileHash: string;
+	combineBeforeDate: string | null;
 	startDate: string | null;
 	endDate: string | null;
 	rowCount: number;
@@ -44,6 +60,9 @@ export interface ImportReport {
 	duplicateCount: number;
 	errorCount: number;
 	unknownCount: number;
+	combinedSourceCount: number;
+	combinedRecordCount: number;
+	detailedImportCount: number;
 }
 
 export interface ImportBatch {
@@ -52,11 +71,15 @@ export interface ImportBatch {
 	accountName: string;
 	adapterId: BankId;
 	fileHash: string;
+	combineBeforeDate: string | null;
 	startDate: string | null;
 	endDate: string | null;
 	rowCount: number;
 	importedCount: number;
 	duplicateCount: number;
 	errorCount: number;
+	combinedSourceCount: number;
+	combinedRecordCount: number;
+	detailedImportCount: number;
 	createdAt: string;
 }

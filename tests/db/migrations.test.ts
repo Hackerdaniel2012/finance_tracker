@@ -48,6 +48,7 @@ const planDeduplicationRepairMigrationPath = resolve(
 const liabilityBaselineMigrationPath = resolve(
 	'migrations/0024_add_liability_balance_baselines.sql'
 );
+const importCombinationMigrationPath = resolve('migrations/0025_add_import_combination.sql');
 
 const expectedTables = [
 	'account_balance_snapshots',
@@ -70,6 +71,35 @@ const expectedTables = [
 ];
 
 describe('D1 migrations', () => {
+	it('adds combined import metadata and cascaded source fingerprints without changing old rows', async () => {
+		const db = await createTestDatabase();
+		await applyMigrations(db, '0024_add_liability_balance_baselines.sql');
+		db.run("INSERT INTO accounts (id, name) VALUES ('combine-account', 'Main')");
+		db.run(`INSERT INTO import_batches (
+			id, account_id, file_hash, adapter_id, row_count, imported_count
+		) VALUES ('combine-batch', 'combine-account', 'hash', 'n26', 1, 1)`);
+		db.run(`INSERT INTO transactions (
+			id, account_id, import_batch_id, dedupe_key, booking_date, amount_cents, search_text
+		) VALUES ('combine-transaction', 'combine-account', 'combine-batch', 'source-key', '2025-12-31', 100, '')`);
+
+		applySql(db, await readFile(importCombinationMigrationPath, 'utf8'));
+
+		expect(
+			firstValue<string>(db, "SELECT kind FROM transactions WHERE id = 'combine-transaction'")
+		).toBe('standard');
+		expect(
+			firstValue<number>(
+				db,
+				"SELECT detailed_import_count FROM import_batches WHERE id = 'combine-batch'"
+			)
+		).toBe(1);
+		db.run(`INSERT INTO import_source_fingerprints (account_id, import_batch_id, dedupe_key)
+			VALUES ('combine-account', 'combine-batch', 'old-source-key')`);
+		db.run("DELETE FROM import_batches WHERE id = 'combine-batch'");
+		expect(firstValue<number>(db, 'SELECT COUNT(*) FROM import_source_fingerprints')).toBe(0);
+		expect(indexNames(db)).toContain('idx_import_source_fingerprints_batch');
+	});
+
 	it('repairs only semantically distinct contract and recurring-plan migrations', async () => {
 		const db = await createTestDatabase();
 		await applyMigrations(db, '0022_add_plan_match_ledger.sql');
@@ -80,23 +110,38 @@ describe('D1 migrations', () => {
 			VALUES ('different-group','repair-account','Other label','Power Co','outgoing','monthly',5000,'2026-08-01','2026-12-01','confirmed','contract-plan'),
 			('same-group','repair-account','Contract','Power Co','outgoing','monthly',5000,'2026-08-01',NULL,'confirmed','contract-plan')`);
 		applySql(db, await readFile(planDeduplicationRepairMigrationPath, 'utf8'));
-		expect(firstValue<string>(db, "SELECT plan_id FROM recurring_groups WHERE id='different-group'")).toBe('recurring-repair:different-group');
-		expect(firstValue<string>(db, "SELECT plan_id FROM recurring_groups WHERE id='same-group'")).toBe('contract-plan');
-		expect(firstValue<number>(db, "SELECT COUNT(*) FROM plans WHERE id LIKE 'recurring-repair:%'")).toBe(1);
+		expect(
+			firstValue<string>(db, "SELECT plan_id FROM recurring_groups WHERE id='different-group'")
+		).toBe('recurring-repair:different-group');
+		expect(
+			firstValue<string>(db, "SELECT plan_id FROM recurring_groups WHERE id='same-group'")
+		).toBe('contract-plan');
+		expect(
+			firstValue<number>(db, "SELECT COUNT(*) FROM plans WHERE id LIKE 'recurring-repair:%'")
+		).toBe(1);
 	});
 
 	it('creates a liability baseline from the first automatic snapshot', async () => {
 		const db = await createTestDatabase();
 		await applyMigrations(db, '0022_add_plan_match_ledger.sql');
-		db.run("INSERT INTO marked_liabilities (id,name,amount_cents,as_of_date) VALUES ('baseline-loan','Loan',9000,'2026-07-10')");
+		db.run(
+			"INSERT INTO marked_liabilities (id,name,amount_cents,as_of_date) VALUES ('baseline-loan','Loan',9000,'2026-07-10')"
+		);
 		db.run(`INSERT INTO plans (id,direction,cadence,amount_cents,next_date,liability_id,schedule_anchor_date,manual_status)
 			VALUES ('baseline-plan','expense','monthly',1000,'2026-07-01','baseline-loan','2026-07-01','active')`);
 		db.run("INSERT INTO accounts (id,name) VALUES ('baseline-account','Account')");
-		db.run("INSERT INTO transactions (id,account_id,dedupe_key,booking_date,amount_cents,search_text) VALUES ('baseline-payment','baseline-account','baseline-payment','2026-07-10',-1000,'')");
+		db.run(
+			"INSERT INTO transactions (id,account_id,dedupe_key,booking_date,amount_cents,search_text) VALUES ('baseline-payment','baseline-account','baseline-payment','2026-07-10',-1000,'')"
+		);
 		db.run(`INSERT INTO plan_transactions (plan_id,transaction_id,match_kind,scheduled_date,occurrence_index,liability_id,liability_amount_before,liability_as_of_date_before)
 			VALUES ('baseline-plan','baseline-payment','automatic','2026-07-10',0,'baseline-loan',10000,'2026-07-01')`);
 		applySql(db, await readFile(liabilityBaselineMigrationPath, 'utf8'));
-		expect(firstValue<string>(db, "SELECT amount_cents || ':' || as_of_date FROM liability_balance_baselines WHERE liability_id='baseline-loan'")).toBe('10000:2026-07-01');
+		expect(
+			firstValue<string>(
+				db,
+				"SELECT amount_cents || ':' || as_of_date FROM liability_balance_baselines WHERE liability_id='baseline-loan'"
+			)
+		).toBe('10000:2026-07-01');
 	});
 	it('adds Shopping and categorizes only Amazon Prime memberships', async () => {
 		const db = await createTestDatabase();

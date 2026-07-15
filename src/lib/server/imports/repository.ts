@@ -14,12 +14,16 @@ export async function listImportBatches(db: DbClient): Promise<ImportBatch[]> {
 				a.name AS account_name,
 				b.adapter_id,
 				b.file_hash,
+				b.combine_before_date,
 				b.start_date,
 				b.end_date,
 				b.row_count,
 				b.imported_count,
 				b.duplicate_count,
 				b.error_count,
+				b.combined_source_count,
+				b.combined_record_count,
+				b.detailed_import_count,
 				b.created_at
 			FROM import_batches b
 			INNER JOIN accounts a ON a.id = b.account_id
@@ -71,12 +75,16 @@ function mapImportBatch(row: ImportBatchRow): ImportBatch {
 		accountName: row.account_name,
 		adapterId: row.adapter_id,
 		fileHash: row.file_hash,
+		combineBeforeDate: row.combine_before_date,
 		startDate: row.start_date,
 		endDate: row.end_date,
 		rowCount: row.row_count,
 		importedCount: row.imported_count,
 		duplicateCount: row.duplicate_count,
 		errorCount: row.error_count,
+		combinedSourceCount: row.combined_source_count,
+		combinedRecordCount: row.combined_record_count,
+		detailedImportCount: row.detailed_import_count,
 		createdAt: row.created_at
 	};
 }
@@ -87,12 +95,16 @@ interface ImportBatchRow extends DbRow {
 	account_name: string;
 	adapter_id: BankId;
 	file_hash: string;
+	combine_before_date: string | null;
 	start_date: string | null;
 	end_date: string | null;
 	row_count: number;
 	imported_count: number;
 	duplicate_count: number;
 	error_count: number;
+	combined_source_count: number;
+	combined_record_count: number;
+	detailed_import_count: number;
 	created_at: string;
 }
 

@@ -264,7 +264,8 @@ async function listCandidateTransactions(db: DbClient): Promise<CandidateTransac
 				t.booking_date, t.amount_cents, COALESCE(c.type, 'unknown') AS category_type
 			FROM transactions t
 			LEFT JOIN categories c ON c.id = t.category_id
-			WHERE t.payee IS NOT NULL AND TRIM(t.payee) != '' AND t.amount_cents != 0
+			WHERE t.kind = 'standard'
+				AND t.payee IS NOT NULL AND TRIM(t.payee) != '' AND t.amount_cents != 0
 				AND COALESCE(c.type, 'unknown') != 'transfer'
 				AND NOT EXISTS (
 					SELECT 1 FROM transactions paired

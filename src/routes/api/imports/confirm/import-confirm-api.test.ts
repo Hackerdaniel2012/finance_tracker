@@ -20,23 +20,26 @@ beforeEach(async () => {
 describe('/api/imports/confirm', () => {
 	it('confirms a multipart CSV import', async () => {
 		const account = await createAccount(db, { name: 'DKB Giro' });
-		const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 		const csv = dkbCsv([
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"'
 		]);
 
-		const response = await POST(event(form(account.id, csv, await sha256Hex(csv))));
+		const response = await POST(event(form(account.id, csv, await sha256Hex(csv), '2026-07-09')));
 
 		expect(response.status).toBe(201);
 		await expect(response.json()).resolves.toMatchObject({
 			report: {
 				accountId: account.id,
 				adapterId: 'dkb_girocard',
+				combineBeforeDate: '2026-07-09',
 				rowCount: 1,
 				importedCount: 1,
+				combinedSourceCount: 1,
+				combinedRecordCount: 1,
+				detailedImportCount: 0,
 				duplicateCount: 0,
 				errorCount: 0,
-				unknownCount: 1
+				unknownCount: 0
 			}
 		});
 	});
@@ -60,11 +63,17 @@ describe('/api/imports/confirm', () => {
 	});
 });
 
-function form(accountId: string, csv: string | undefined, expectedHash: string): FormData {
+function form(
+	accountId: string,
+	csv: string | undefined,
+	expectedHash: string,
+	combineBeforeDate?: string
+): FormData {
 	const data = new FormData();
 	data.set('accountId', accountId);
 	data.set('adapterId', 'dkb_girocard');
 	data.set('expectedHash', expectedHash);
+	if (combineBeforeDate) data.set('combineBeforeDate', combineBeforeDate);
 
 	if (csv !== undefined) {
 		data.set('file', new Blob([csv], { type: 'text/csv' }), 'bank.csv');

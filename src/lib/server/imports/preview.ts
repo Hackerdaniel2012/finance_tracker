@@ -5,6 +5,7 @@ import { getAccount } from '../accounts/repository';
 import { getDateRange, sha256Hex } from './shared';
 import { getExistingTransactionsByDedupeKey, partitionImportRows } from './deduplication';
 import type { ImportPreview, ImportPreviewInput } from './types';
+import { combineImportRows, parseCombineBeforeDate } from './combination';
 
 const sampleRowLimit = 5;
 
@@ -13,6 +14,7 @@ export async function previewImport(
 	input: ImportPreviewInput
 ): Promise<ImportPreview> {
 	const accountId = input.accountId.trim();
+	const combineBeforeDate = parseCombineBeforeDate(input.combineBeforeDate);
 	if (!accountId) {
 		throw new ValidationError('accountId is required');
 	}
@@ -34,22 +36,34 @@ export async function previewImport(
 		parsed.rows.map((row) => row.dedupeKey)
 	);
 	const partition = partitionImportRows(parsed.rows, existingTransactions);
+	const combination = combineImportRows(partition.rows, combineBeforeDate);
 	const { startDate, endDate } = getDateRange(parsed.rows.map((row) => row.bookingDate));
 
 	return {
 		accountId: account.id,
 		adapterId: adapter.id,
 		fileHash: await sha256Hex(input.csv),
+		combineBeforeDate,
 		summary: {
 			parsedRows: parsed.rows.length,
 			skippedRows: parsed.skippedRows,
 			errorCount: parsed.errors.length,
 			duplicateEstimate: partition.duplicates.length,
 			startDate,
-			endDate
+			endDate,
+			combinedSourceCount: combination.combinedSourceCount,
+			combinedRecordCount: combination.combinedGroups.length,
+			detailedImportCount: combination.detailedRows.length,
+			effectiveImportCount: combination.detailedRows.length + combination.combinedGroups.length
 		},
 		metadata: parsed.metadata ?? {},
-		sampleRows: parsed.rows.slice(0, sampleRowLimit),
+		sampleRows: combination.detailedRows.slice(0, sampleRowLimit),
+		combinedRows: combination.combinedGroups.map((group) => ({
+			subaccount: group.subaccount,
+			bookingDate: group.bookingDate,
+			amountCents: group.amountCents,
+			sourceRowCount: group.sourceRowCount
+		})),
 		duplicateRows: partition.duplicates,
 		errors: parsed.errors
 	};

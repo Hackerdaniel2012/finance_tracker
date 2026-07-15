@@ -23,6 +23,30 @@ beforeEach(async () => {
 });
 
 describe('confirmImport', () => {
+	it('keeps large pooled imports within D1 bound-parameter limits', async () => {
+		const importAccount = await createN26Account();
+		const rows = Array.from({ length: 80 }, (_, index) => {
+			const day = String((index % 28) + 1).padStart(2, '0');
+			return `2025-12-${day},,Old ${index},DE,"Debit Transfer",Old ${index},Main,-1.00,,,`;
+		});
+		rows.push('2026-01-01,,Current,DE,"Credit Transfer",Current,Main,100.00,,,');
+		const csv = n26Csv(rows);
+
+		const report = await confirmImport(createBoundParameterLimitClient(db, 100), {
+			accountId: importAccount.accountId,
+			adapterId: importAccount.bankId,
+			csv,
+			expectedHash: await sha256Hex(csv),
+			combineBeforeDate: '2026-01-01'
+		});
+
+		expect(report).toMatchObject({
+			combinedSourceCount: 80,
+			combinedRecordCount: 1,
+			detailedImportCount: 1
+		});
+	});
+
 	it('inserts parsed transactions, applies rules, and flags unknown rows', async () => {
 		const importAccount = await createDkbAccount();
 		await createCategoryRule(db, {
@@ -183,6 +207,66 @@ describe('confirmImport', () => {
 		expect(row?.subaccounts?.split(',').sort()).toEqual(['20k in 2023', 'Hauptkonto']);
 	});
 
+	it('combines older rows per subaccount and retains exact overlap fingerprints', async () => {
+		const importAccount = await createN26Account();
+		const csv = n26Csv([
+			'2025-12-01,,Old Credit,DE,"Credit Transfer",Old,Main,10.00,,,',
+			'2025-12-02,,Old Debit,DE,"Debit Transfer",Old,Main,-10.00,,,',
+			'2025-12-03,,Old Space,DE,"Debit Transfer",Old,Savings,-5.00,,,',
+			'2026-01-01,,Current,DE,"Credit Transfer",Current,Main,20.00,,,'
+		]);
+
+		const report = await confirmImport(db, {
+			accountId: importAccount.accountId,
+			adapterId: importAccount.bankId,
+			csv,
+			expectedHash: await sha256Hex(csv),
+			combineBeforeDate: '2026-01-01'
+		});
+
+		expect(report).toMatchObject({
+			combineBeforeDate: '2026-01-01',
+			rowCount: 4,
+			importedCount: 3,
+			combinedSourceCount: 3,
+			combinedRecordCount: 2,
+			detailedImportCount: 1,
+			duplicateCount: 0,
+			unknownCount: 1
+		});
+		expect(firstValue<number>(sqlite, 'SELECT SUM(amount_cents) FROM transactions')).toBe(1500);
+		expect(
+			firstValue<number>(
+				sqlite,
+				"SELECT COUNT(*) FROM transactions WHERE kind = 'combined_import' AND booking_date = '2025-12-31' AND classification_status = 'ignored' AND category_id IS NULL AND payee IS NULL AND description IS NULL"
+			)
+		).toBe(2);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_source_fingerprints')).toBe(3);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transaction_review_flags')).toBe(1);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM recurring_groups')).toBe(0);
+
+		const overlappingCsv = n26Csv([
+			'2025-12-01,,Old Credit,DE,"Credit Transfer",Old,Main,10.00,,,',
+			'2025-12-03,,Old Space,DE,"Debit Transfer",Old,Savings,-5.00,,,',
+			'2026-02-01,,New,DE,"Credit Transfer",New,Main,30.00,,,'
+		]);
+		const overlap = await confirmImport(db, {
+			accountId: importAccount.accountId,
+			adapterId: importAccount.bankId,
+			csv: overlappingCsv,
+			expectedHash: await sha256Hex(overlappingCsv),
+			combineBeforeDate: '2026-01-01'
+		});
+		expect(overlap).toMatchObject({
+			importedCount: 1,
+			duplicateCount: 2,
+			combinedSourceCount: 0,
+			combinedRecordCount: 0,
+			detailedImportCount: 1
+		});
+		expect(firstValue<number>(sqlite, 'SELECT SUM(amount_cents) FROM transactions')).toBe(4500);
+	});
+
 	it('imports the latest N26 fixture to the expected computed balance', async () => {
 		const importAccount = await createN26Account();
 		const csv = await readFile(resolve('tests/fixtures/n26-basic.csv'), 'utf8');
@@ -264,11 +348,12 @@ describe('confirmImport', () => {
 
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM recurring_groups')).toBe(1);
 		expect(
-			firstValue<string>(
-				sqlite,
-				"SELECT status || ':' || cadence || ':' || next_date FROM recurring_groups"
-			)
-		).toBe('suggested:monthly:2026-07-14');
+			firstValue<string>(sqlite, "SELECT status || ':' || cadence FROM recurring_groups")
+		).toBe('suggested:monthly');
+		expect(
+			(firstValue<string>(sqlite, 'SELECT next_date FROM recurring_groups') ?? '') >=
+				new Date().toISOString().slice(0, 10)
+		).toBe(true);
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM recurring_group_transactions')).toBe(3);
 	});
 });
@@ -324,6 +409,18 @@ function createFailingBatchClient(db: DbClient, failingSql: string): DbClient {
 	};
 }
 
+function createBoundParameterLimitClient(db: DbClient, limit: number): DbClient {
+	return {
+		prepare(sql) {
+			return new BoundParameterLimitStatement(db.prepare(sql), limit);
+		},
+		batch(statements) {
+			if (!db.batch) throw new Error('Test database does not support batch');
+			return db.batch(statements);
+		}
+	};
+}
+
 class FailingStatement implements DbStatement {
 	constructor(private readonly statement: DbStatement) {}
 
@@ -342,5 +439,30 @@ class FailingStatement implements DbStatement {
 
 	async run(): Promise<DbRunResult> {
 		throw new Error('forced batch failure');
+	}
+}
+
+class BoundParameterLimitStatement implements DbStatement {
+	constructor(
+		private readonly statement: DbStatement,
+		private readonly limit: number
+	) {}
+
+	bind(...values: DbValue[]): DbStatement {
+		if (values.length > this.limit) throw new Error(`too many SQL variables: ${values.length}`);
+		this.statement.bind(...values);
+		return this;
+	}
+
+	all<T extends Record<string, DbValue>>() {
+		return this.statement.all<T>();
+	}
+
+	first<T extends Record<string, DbValue>>() {
+		return this.statement.first<T>();
+	}
+
+	run() {
+		return this.statement.run();
 	}
 }

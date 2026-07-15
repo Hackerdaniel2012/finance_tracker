@@ -1,4 +1,5 @@
 export type TransactionClassificationStatus = 'unknown' | 'auto' | 'manual' | 'ignored';
+export type TransactionKind = 'standard' | 'combined_import';
 export type TransactionSort = 'booking_date' | 'amount_cents' | 'payee';
 export type SortDirection = 'asc' | 'desc';
 export type TransactionDirection = 'income' | 'expense';
@@ -13,6 +14,9 @@ export interface Transaction {
 	id: string;
 	accountId: string;
 	accountName: string;
+	kind: TransactionKind;
+	subaccount: string | null;
+	combineBeforeDate: string | null;
 	importBatchId: string | null;
 	categoryId: string | null;
 	categoryName: string | null;

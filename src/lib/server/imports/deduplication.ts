@@ -1,7 +1,9 @@
 import type { NormalizedTransaction } from '$lib/banks';
 import type { DbClient, DbRow } from '../db-client';
 
-const lookupChunkSize = 50;
+// The query checks both transaction tables and therefore binds each key twice.
+// Keep the total below D1's per-statement bound-parameter limit.
+const lookupChunkSize = 40;
 
 export interface ExistingDuplicateTransaction {
 	bookingDate: string;
@@ -9,6 +11,7 @@ export interface ExistingDuplicateTransaction {
 	payee: string | null;
 	description: string | null;
 	dedupeKey: string;
+	isFingerprint?: boolean;
 }
 
 export interface DuplicateImportRow {
@@ -30,12 +33,16 @@ export async function getExistingTransactionsByDedupeKey(
 		const placeholders = chunk.map(() => '?').join(', ');
 		const { results } = await db
 			.prepare(
-				`SELECT booking_date, amount_cents, payee, description, dedupe_key
+				`SELECT booking_date, amount_cents, payee, description, dedupe_key, 0 AS is_fingerprint
 				FROM transactions
-				WHERE account_id = ?
-					AND dedupe_key IN (${placeholders})`
+				WHERE account_id = ? AND dedupe_key IN (${placeholders})
+				UNION ALL
+				SELECT '' AS booking_date, 0 AS amount_cents, NULL AS payee, NULL AS description,
+					dedupe_key, 1 AS is_fingerprint
+				FROM import_source_fingerprints
+				WHERE account_id = ? AND dedupe_key IN (${placeholders})`
 			)
-			.bind(accountId, ...chunk)
+			.bind(accountId, ...chunk, accountId, ...chunk)
 			.all<ExistingTransactionRow>();
 
 		for (const row of results) {
@@ -44,7 +51,8 @@ export async function getExistingTransactionsByDedupeKey(
 				amountCents: row.amount_cents,
 				payee: row.payee,
 				description: row.description,
-				dedupeKey: row.dedupe_key
+				dedupeKey: row.dedupe_key,
+				isFingerprint: row.is_fingerprint === 1
 			});
 		}
 	}
@@ -63,7 +71,11 @@ export function partitionImportRows(
 	for (const row of rows) {
 		const existingTransaction = existingTransactions.get(row.dedupeKey);
 		if (existingTransaction) {
-			duplicates.push({ transaction: row, reason: 'existing_transaction', existingTransaction });
+			duplicates.push({
+				transaction: row,
+				reason: 'existing_transaction',
+				existingTransaction: existingTransaction.isFingerprint ? undefined : existingTransaction
+			});
 			continue;
 		}
 
@@ -85,4 +97,5 @@ interface ExistingTransactionRow extends DbRow {
 	payee: string | null;
 	description: string | null;
 	dedupe_key: string;
+	is_fingerprint: number;
 }

@@ -31,8 +31,10 @@ describe('import batch repository', () => {
 			accountId: importAccount.accountId,
 			adapterId: importAccount.bankId,
 			csv,
-			expectedHash: await sha256Hex(csv)
+			expectedHash: await sha256Hex(csv),
+			combineBeforeDate: '2026-07-09'
 		});
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_source_fingerprints')).toBe(1);
 
 		const batches = await listImportBatches(db);
 
@@ -45,7 +47,11 @@ describe('import batch repository', () => {
 				rowCount: 1,
 				importedCount: 1,
 				duplicateCount: 0,
-				errorCount: 0
+				errorCount: 0,
+				combineBeforeDate: '2026-07-09',
+				combinedSourceCount: 1,
+				combinedRecordCount: 1,
+				detailedImportCount: 0
 			})
 		]);
 		expect(batches[0]?.fileHash).toMatch(/^[a-f0-9]{64}$/);
@@ -61,14 +67,17 @@ describe('import batch repository', () => {
 			accountId: importAccount.accountId,
 			adapterId: importAccount.bankId,
 			csv,
-			expectedHash: await sha256Hex(csv)
+			expectedHash: await sha256Hex(csv),
+			combineBeforeDate: '2026-07-09'
 		});
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_source_fingerprints')).toBe(1);
 
 		await deleteImportBatch(db, report.batchId);
 
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches')).toBe(0);
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(0);
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_row_errors')).toBe(0);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_source_fingerprints')).toBe(0);
 	});
 
 	it('returns not found errors for missing batches', async () => {

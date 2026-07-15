@@ -9,6 +9,7 @@ export const POST: RequestHandler = async (event) => {
 		const form = await readFormData(event.request);
 		const accountId = getFormString(form, 'accountId');
 		const adapterId = getFormString(form, 'adapterId');
+		const combineBeforeDate = getOptionalFormString(form, 'combineBeforeDate');
 		const file = form.get('file');
 
 		if (!(file instanceof Blob)) {
@@ -18,7 +19,8 @@ export const POST: RequestHandler = async (event) => {
 		const preview = await previewImport(getRequestDatabase(event), {
 			accountId,
 			adapterId,
-			csv: await file.text()
+			csv: await file.text(),
+			combineBeforeDate
 		});
 
 		return json({ preview });
@@ -33,6 +35,13 @@ async function readFormData(request: Request): Promise<FormData> {
 	} catch {
 		throw new ValidationError('Request body must be multipart form data');
 	}
+}
+
+function getOptionalFormString(form: FormData, field: string): string | null {
+	const value = form.get(field);
+	if (value === null || value === '') return null;
+	if (typeof value !== 'string') throw new ValidationError(`${field} must be a string`);
+	return value.trim() || null;
 }
 
 function getFormString(form: FormData, field: string): string {
