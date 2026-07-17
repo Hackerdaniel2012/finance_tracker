@@ -1,4 +1,10 @@
 import { NotFoundError } from '../accounts/errors';
+import {
+	calculateBalanceAsOf,
+	listCalculatedAccountBalances,
+	type BalanceSnapshot,
+	type BalanceTransaction
+} from '../accounts/balance';
 import type { DbClient, DbRow } from '../db-client';
 import type {
 	AccountBalanceHistoryReport,
@@ -14,13 +20,13 @@ export async function getSummaryReport(
 	range: ReportDateRange,
 	options?: SummaryReportOptions
 ): Promise<SummaryReport> {
-	const { accountId, subaccount } = options ?? {};
+	const { accountId } = options ?? {};
 	const [totals, byCategory, byMonthCategory, byAccount, recentTransactions] = await Promise.all([
-		getSummaryTotals(db, range, accountId, subaccount),
-		getSummaryByCategory(db, range, accountId, subaccount),
-		getSummaryByMonthCategory(db, range, accountId, subaccount),
-		getSummaryByAccount(db, range, accountId, subaccount),
-		getRecentTransactions(db, range, accountId, subaccount)
+		getSummaryTotals(db, range, accountId),
+		getSummaryByCategory(db, range, accountId),
+		getSummaryByMonthCategory(db, range, accountId),
+		getSummaryByAccount(db, range, accountId),
+		getRecentTransactions(db, range, accountId)
 	]);
 
 	return {
@@ -36,11 +42,9 @@ export async function getSummaryReport(
 async function getSummaryByMonthCategory(
 	db: DbClient,
 	range: ReportDateRange,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<SummaryReport['byMonthCategory']> {
 	const accountClause = accountId ? 'AND t.account_id = ?' : '';
-	const subaccountClause = subaccount ? 'AND t.subaccount = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT strftime('%Y-%m', t.booking_date) AS month,
@@ -49,7 +53,7 @@ async function getSummaryByMonthCategory(
 				-COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN t.amount_cents ELSE 0 END), 0) AS expense_cents
 			FROM transactions t
 			LEFT JOIN categories c ON c.id = t.category_id
-			WHERE t.booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}
+			WHERE t.booking_date BETWEEN ? AND ? ${accountClause}
 			GROUP BY month, t.category_id, c.name
 			HAVING expense_cents > 0
 			ORDER BY month ASC, expense_cents DESC, category_name ASC`
@@ -57,8 +61,7 @@ async function getSummaryByMonthCategory(
 		.bind(
 			range.from,
 			range.to,
-			...(accountId ? [accountId] : []),
-			...(subaccount ? [subaccount] : [])
+			...(accountId ? [accountId] : [])
 		)
 		.all<MonthlyCategorySummaryRow>();
 
@@ -75,15 +78,18 @@ export async function getNetWorthReport(
 	range: ReportDateRange,
 	options?: NetWorthReportOptions
 ): Promise<NetWorthReport> {
-	const { accountId, subaccount } = options ?? {};
+	const { accountId } = options ?? {};
 	const [accounts, liabilities, snapshotRows, balanceEventDates, assetInputs] = await Promise.all([
-		getCurrentAccountBalances(db, range.to, accountId, subaccount),
+		getCurrentAccountBalances(db, range.to, accountId),
 		getActiveLiabilities(db, range.to, accountId),
 		getSnapshotPoints(db, range, accountId),
-		getBalanceEventDates(db, range, accountId, subaccount),
-		getAssetInputs(db, range.to, accountId, subaccount)
+		getBalanceEventDates(db, range, accountId),
+		getAssetInputs(db, range.to, accountId)
 	]);
-	const currentAssetsCents = accounts.reduce((sum, account) => sum + account.balanceCents, 0);
+	const currentAssetsCents = accounts.reduce(
+		(sum, account) => sum + (account.balanceCents ?? 0),
+		0
+	);
 	const currentLiabilitiesCents = liabilities.reduce(
 		(sum, liability) => sum + liability.amountCents,
 		0
@@ -132,20 +138,28 @@ export async function getAccountBalanceHistory(
 ): Promise<AccountBalanceHistoryReport> {
 	const [account, snapshots, transactions] = await Promise.all([
 		getAssetAccount(db, accountId),
-		getAssetSnapshotsForAccount(db, accountId, range.to),
-		getAssetTransactionsForAccount(db, accountId, range.to)
+		getAssetSnapshotsForAccount(db, accountId),
+		getAssetTransactionsForAccount(db, accountId)
 	]);
 
 	if (!account) {
 		throw new NotFoundError('Account not found');
 	}
 
+	if (snapshots.length === 0) {
+		return { accountId, accountName: account.name, range, points: [] };
+	}
+
 	const inputs: AssetInputs = { accounts: [account], transactions, snapshots };
 	const eventDates = [
 		...new Set([
 			range.from,
-			...snapshots.map((snapshot) => snapshot.snapshot_date),
-			...transactions.map((transaction) => transaction.booking_date),
+			...snapshots
+				.map((snapshot) => snapshot.snapshot_date)
+				.filter((date) => date >= range.from && date <= range.to),
+			...transactions
+				.map((transaction) => transaction.booking_date)
+				.filter((date) => date >= range.from && date <= range.to),
 			range.to
 		])
 	].sort();
@@ -178,9 +192,7 @@ async function getAssetAccount(db: DbClient, accountId: string): Promise<AssetAc
 		.prepare(
 			`SELECT
 				id AS account_id,
-				name,
-				opening_balance_cents,
-				current_balance_cents
+				name
 			FROM accounts
 			WHERE id = ?`
 		)
@@ -190,17 +202,19 @@ async function getAssetAccount(db: DbClient, accountId: string): Promise<AssetAc
 
 async function getAssetSnapshotsForAccount(
 	db: DbClient,
-	accountId: string,
-	currentDate: string
+	accountId: string
 ): Promise<AssetSnapshotRow[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT account_id, snapshot_date, balance_cents, created_at, id
-			FROM account_balance_snapshots
-			WHERE account_id = ? AND snapshot_date <= ?
-			ORDER BY snapshot_date ASC, created_at ASC, id ASC`
+			`SELECT s.account_id, s.snapshot_date, s.balance_cents, s.anchor_import_batch_id,
+				r.import_order AS anchor_import_order, s.created_at, s.id
+			FROM account_balance_snapshots s
+			LEFT JOIN import_batches b ON b.id = s.anchor_import_batch_id
+			LEFT JOIN import_runs r ON r.id = b.import_run_id
+			WHERE s.account_id = ?
+			ORDER BY s.snapshot_date ASC, s.created_at ASC, s.id ASC`
 		)
-		.bind(accountId, currentDate)
+		.bind(accountId)
 		.all<AssetSnapshotRow>();
 
 	return results;
@@ -208,17 +222,19 @@ async function getAssetSnapshotsForAccount(
 
 async function getAssetTransactionsForAccount(
 	db: DbClient,
-	accountId: string,
-	currentDate: string
+	accountId: string
 ): Promise<AssetTransactionRow[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT account_id, booking_date, amount_cents, balance_after_cents, created_at, id
-			FROM transactions
-			WHERE account_id = ? AND booking_date <= ?
-			ORDER BY booking_date ASC, created_at ASC, id ASC`
+			`SELECT t.account_id, t.booking_date, t.amount_cents, t.import_batch_id,
+				r.import_order, t.created_at, t.id
+			FROM transactions t
+			LEFT JOIN import_batches b ON b.id = t.import_batch_id
+			LEFT JOIN import_runs r ON r.id = b.import_run_id
+			WHERE t.account_id = ?
+			ORDER BY t.booking_date ASC, t.created_at ASC, t.id ASC`
 		)
-		.bind(accountId, currentDate)
+		.bind(accountId)
 		.all<AssetTransactionRow>();
 
 	return results;
@@ -227,11 +243,9 @@ async function getAssetTransactionsForAccount(
 async function getSummaryTotals(
 	db: DbClient,
 	range: ReportDateRange,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<SummaryReport['totals']> {
 	const accountClause = accountId ? 'AND account_id = ?' : '';
-	const subaccountClause = subaccount ? 'AND subaccount = ?' : '';
 	const row = await db
 		.prepare(
 			`SELECT
@@ -241,13 +255,12 @@ async function getSummaryTotals(
 				COUNT(*) AS transaction_count,
 				COALESCE(SUM(CASE WHEN classification_status = 'unknown' THEN 1 ELSE 0 END), 0) AS unknown_count
 			FROM transactions
-			WHERE booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}`
+			WHERE booking_date BETWEEN ? AND ? ${accountClause}`
 		)
 		.bind(
 			range.from,
 			range.to,
-			...(accountId ? [accountId] : []),
-			...(subaccount ? [subaccount] : [])
+			...(accountId ? [accountId] : [])
 		)
 		.first<TotalsRow>();
 
@@ -263,11 +276,9 @@ async function getSummaryTotals(
 async function getSummaryByCategory(
 	db: DbClient,
 	range: ReportDateRange,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<SummaryReport['byCategory']> {
 	const accountClause = accountId ? 'AND t.account_id = ?' : '';
-	const subaccountClause = subaccount ? 'AND t.subaccount = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT
@@ -280,15 +291,14 @@ async function getSummaryByCategory(
 				COUNT(*) AS transaction_count
 			FROM transactions t
 			LEFT JOIN categories c ON c.id = t.category_id
-			WHERE t.booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}
+			WHERE t.booking_date BETWEEN ? AND ? ${accountClause}
 			GROUP BY t.category_id, c.name, c.type
 			ORDER BY expense_cents DESC, income_cents DESC, category_name ASC`
 		)
 		.bind(
 			range.from,
 			range.to,
-			...(accountId ? [accountId] : []),
-			...(subaccount ? [subaccount] : [])
+			...(accountId ? [accountId] : [])
 		)
 		.all<CategorySummaryRow>();
 
@@ -306,59 +316,57 @@ async function getSummaryByCategory(
 async function getSummaryByAccount(
 	db: DbClient,
 	range: ReportDateRange,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<SummaryReport['byAccount']> {
 	const accountClause = accountId ? 'WHERE a.id = ?' : '';
-	const subaccountClause = subaccount ? 'AND t.subaccount = ?' : '';
-	const { results } = await db
-		.prepare(
-			`SELECT
+	const [{ results }, balances] = await Promise.all([
+		db
+			.prepare(
+				`SELECT
 				a.id AS account_id,
 				a.name AS account_name,
-				a.opening_balance_cents,
-				a.current_balance_cents,
-				COALESCE(SUM(CASE WHEN t.booking_date <= ? THEN t.amount_cents ELSE 0 END), 0) AS net_to_date_cents,
 				COALESCE(SUM(CASE WHEN t.booking_date BETWEEN ? AND ? AND t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) AS income_cents,
 				COALESCE(SUM(CASE WHEN t.booking_date BETWEEN ? AND ? AND t.amount_cents < 0 THEN t.amount_cents ELSE 0 END), 0) AS expense_cents,
 				COALESCE(SUM(CASE WHEN t.booking_date BETWEEN ? AND ? THEN t.amount_cents ELSE 0 END), 0) AS net_cents
 			FROM accounts a
-			LEFT JOIN transactions t ON t.account_id = a.id ${subaccountClause}
+			LEFT JOIN transactions t ON t.account_id = a.id
 			${accountClause}
-			GROUP BY a.id, a.name, a.opening_balance_cents, a.current_balance_cents
+			GROUP BY a.id, a.name
 			ORDER BY a.display_order ASC, a.created_at ASC`
-		)
-		.bind(
-			range.to,
-			range.from,
-			range.to,
-			range.from,
-			range.to,
-			range.from,
-			range.to,
-			...(subaccount ? [subaccount] : []),
-			...(accountId ? [accountId] : [])
-		)
-		.all<AccountSummaryRow>();
+			)
+			.bind(
+				range.from,
+				range.to,
+				range.from,
+				range.to,
+				range.from,
+				range.to,
+				...(accountId ? [accountId] : [])
+			)
+			.all<AccountSummaryRow>(),
+		listCalculatedAccountBalances(db, range.to, accountId)
+	]);
 
-	return results.map((row) => ({
-		accountId: row.account_id,
-		accountName: row.account_name,
-		balanceCents: row.current_balance_cents ?? row.opening_balance_cents + row.net_to_date_cents,
-		incomeCents: row.income_cents,
-		expenseCents: row.expense_cents,
-		netCents: row.net_cents
-	}));
+	return results.map((row) => {
+		const balance = balances.find((item) => item.accountId === row.account_id);
+		return {
+			accountId: row.account_id,
+			accountName: row.account_name,
+			balanceCents: balance?.balanceCents ?? null,
+			balanceInitialized: balance?.balanceInitialized ?? false,
+			incomeCents: row.income_cents,
+			expenseCents: row.expense_cents,
+			netCents: row.net_cents
+		};
+	});
 }
 
 async function getRecentTransactions(
 	db: DbClient,
 	range: ReportDateRange,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<SummaryReport['recentTransactions']> {
 	const accountClause = accountId ? 'AND t.account_id = ?' : '';
-	const subaccountClause = subaccount ? 'AND t.subaccount = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT
@@ -372,15 +380,14 @@ async function getRecentTransactions(
 			FROM transactions t
 			INNER JOIN accounts a ON a.id = t.account_id
 			LEFT JOIN categories c ON c.id = t.category_id
-			WHERE t.booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}
+			WHERE t.booking_date BETWEEN ? AND ? ${accountClause}
 			ORDER BY t.booking_date DESC, t.id DESC
 			LIMIT 10`
 		)
 		.bind(
 			range.from,
 			range.to,
-			...(accountId ? [accountId] : []),
-			...(subaccount ? [subaccount] : [])
+			...(accountId ? [accountId] : [])
 		)
 		.all<RecentTransactionRow>();
 
@@ -398,44 +405,19 @@ async function getRecentTransactions(
 async function getCurrentAccountBalances(
 	db: DbClient,
 	asOfDate: string,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<NetWorthReport['accounts']> {
-	const accountClause = accountId ? 'WHERE a.id = ?' : '';
-	const subaccountClause = subaccount ? 'AND t.subaccount = ?' : '';
-	const { results } = await db
-		.prepare(
-			`SELECT
-				a.id AS account_id,
-				a.name AS account_name,
-				a.opening_balance_cents,
-				a.current_balance_cents,
-				COALESCE(SUM(CASE WHEN t.booking_date <= ? THEN t.amount_cents ELSE 0 END), 0) AS net_to_date_cents
-			FROM accounts a
-			LEFT JOIN transactions t ON t.account_id = a.id ${subaccountClause}
-			${accountClause}
-			GROUP BY a.id, a.name, a.opening_balance_cents, a.current_balance_cents
-			ORDER BY a.display_order ASC, a.created_at ASC`
-		)
-		.bind(asOfDate, ...(subaccount ? [subaccount] : []), ...(accountId ? [accountId] : []))
-		.all<AccountBalanceRow>();
-
-	return results.map((row) => ({
-		accountId: row.account_id,
-		accountName: row.account_name,
-		balanceCents: row.current_balance_cents ?? row.opening_balance_cents + row.net_to_date_cents
-	}));
+	return listCalculatedAccountBalances(db, asOfDate, accountId);
 }
 
 async function getAssetInputs(
 	db: DbClient,
 	currentDate: string,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<AssetInputs> {
 	const [accounts, transactions, snapshots] = await Promise.all([
 		getAssetAccounts(db, accountId),
-		getAssetTransactions(db, currentDate, accountId, subaccount),
+		getAssetTransactions(db, currentDate, accountId),
 		getAssetSnapshots(db, currentDate, accountId)
 	]);
 
@@ -448,9 +430,7 @@ async function getAssetAccounts(db: DbClient, accountId?: string): Promise<Asset
 		.prepare(
 			`SELECT
 				a.id AS account_id,
-				a.name,
-				a.opening_balance_cents,
-				a.current_balance_cents
+				a.name
 			FROM accounts a
 			${accountClause}`
 		)
@@ -462,20 +442,21 @@ async function getAssetAccounts(db: DbClient, accountId?: string): Promise<Asset
 
 async function getAssetTransactions(
 	db: DbClient,
-	currentDate: string,
-	accountId?: string,
-	subaccount?: string
+	_currentDate: string,
+	accountId?: string
 ): Promise<AssetTransactionRow[]> {
-	const accountClause = accountId ? 'AND account_id = ?' : '';
-	const subaccountClause = subaccount ? 'AND subaccount = ?' : '';
+	const accountClause = accountId ? 'AND t.account_id = ?' : '';
 	const { results } = await db
 		.prepare(
-			`SELECT account_id, booking_date, amount_cents, balance_after_cents, created_at, id
-			FROM transactions
-			WHERE booking_date <= ? ${accountClause} ${subaccountClause}
-			ORDER BY account_id ASC, booking_date ASC, created_at ASC, id ASC`
+			`SELECT t.account_id, t.booking_date, t.amount_cents, t.import_batch_id,
+				r.import_order, t.created_at, t.id
+			FROM transactions t
+			LEFT JOIN import_batches b ON b.id = t.import_batch_id
+			LEFT JOIN import_runs r ON r.id = b.import_run_id
+			WHERE 1 = 1 ${accountClause}
+			ORDER BY t.account_id ASC, t.booking_date ASC, t.created_at ASC, t.id ASC`
 		)
-		.bind(currentDate, ...(accountId ? [accountId] : []), ...(subaccount ? [subaccount] : []))
+		.bind(...(accountId ? [accountId] : []))
 		.all<AssetTransactionRow>();
 
 	return results;
@@ -483,18 +464,21 @@ async function getAssetTransactions(
 
 async function getAssetSnapshots(
 	db: DbClient,
-	currentDate: string,
+	_currentDate: string,
 	accountId?: string
 ): Promise<AssetSnapshotRow[]> {
-	const accountClause = accountId ? 'AND account_id = ?' : '';
+	const accountClause = accountId ? 'AND s.account_id = ?' : '';
 	const { results } = await db
 		.prepare(
-			`SELECT account_id, snapshot_date, balance_cents, created_at, id
-			FROM account_balance_snapshots
-			WHERE snapshot_date <= ? ${accountClause}
-			ORDER BY account_id ASC, snapshot_date ASC, created_at ASC, id ASC`
+			`SELECT s.account_id, s.snapshot_date, s.balance_cents, s.anchor_import_batch_id,
+				r.import_order AS anchor_import_order, s.created_at, s.id
+			FROM account_balance_snapshots s
+			LEFT JOIN import_batches b ON b.id = s.anchor_import_batch_id
+			LEFT JOIN import_runs r ON r.id = b.import_run_id
+			WHERE 1 = 1 ${accountClause}
+			ORDER BY s.account_id ASC, s.snapshot_date ASC, s.created_at ASC, s.id ASC`
 		)
-		.bind(currentDate, ...(accountId ? [accountId] : []))
+		.bind(...(accountId ? [accountId] : []))
 		.all<AssetSnapshotRow>();
 
 	return results;
@@ -513,35 +497,18 @@ function getAccountBalanceAsOf(
 	asOfDate: string,
 	currentDate: string
 ): number {
-	const accountTransactions = inputs.transactions.filter(
-		(transaction) => transaction.account_id === account.account_id
+	void currentDate;
+	return (
+		calculateBalanceAsOf(
+			inputs.snapshots
+				.filter((row) => row.account_id === account.account_id)
+				.map(mapBalanceSnapshot),
+			inputs.transactions
+				.filter((row) => row.account_id === account.account_id)
+				.map(mapBalanceTransaction),
+			asOfDate
+		) ?? 0
 	);
-	const balanceAfter = latestBalanceAfterTransaction(accountTransactions, asOfDate);
-	if (balanceAfter) {
-		return (
-			balanceAfter.balance_after_cents +
-			transactionDelta(accountTransactions, balanceAfter.booking_date, asOfDate)
-		);
-	}
-
-	const snapshot = latestAccountSnapshot(
-		inputs.snapshots.filter((row) => row.account_id === account.account_id),
-		asOfDate
-	);
-	if (snapshot) {
-		return (
-			snapshot.balance_cents +
-			transactionDelta(accountTransactions, snapshot.snapshot_date, asOfDate)
-		);
-	}
-
-	if (account.current_balance_cents !== null) {
-		return (
-			account.current_balance_cents - transactionDelta(accountTransactions, asOfDate, currentDate)
-		);
-	}
-
-	return account.opening_balance_cents + transactionDeltaFromStart(accountTransactions, asOfDate);
 }
 
 async function getActiveLiabilities(
@@ -593,17 +560,15 @@ async function getSnapshotPoints(
 async function getBalanceEventDates(
 	db: DbClient,
 	range: ReportDateRange,
-	accountId?: string,
-	subaccount?: string
+	accountId?: string
 ): Promise<string[]> {
 	const transactionAccountClause = accountId ? 'AND account_id = ?' : '';
-	const transactionSubaccountClause = subaccount ? 'AND subaccount = ?' : '';
 	const liabilityAccountClause = accountId ? 'AND account_id = ?' : '';
 	const { results } = await db
 		.prepare(
 			`SELECT booking_date AS date
 			FROM transactions
-			WHERE booking_date BETWEEN ? AND ? ${transactionAccountClause} ${transactionSubaccountClause}
+			WHERE booking_date BETWEEN ? AND ? ${transactionAccountClause}
 			GROUP BY booking_date
 			UNION
 			SELECT as_of_date AS date
@@ -618,7 +583,6 @@ async function getBalanceEventDates(
 			range.from,
 			range.to,
 			...(accountId ? [accountId] : []),
-			...(subaccount ? [subaccount] : []),
 			range.from,
 			range.to,
 			...(accountId ? [accountId] : [])
@@ -628,47 +592,28 @@ async function getBalanceEventDates(
 	return results.map((row) => row.date);
 }
 
-function latestBalanceAfterTransaction(
-	transactions: AssetTransactionRow[],
-	asOfDate: string
-): AssetBalanceAfterRow | null {
-	for (let index = transactions.length - 1; index >= 0; index -= 1) {
-		const transaction = transactions[index];
-		if (transaction.booking_date <= asOfDate && transaction.balance_after_cents !== null) {
-			return { ...transaction, balance_after_cents: transaction.balance_after_cents };
-		}
-	}
-
-	return null;
+function mapBalanceSnapshot(row: AssetSnapshotRow): BalanceSnapshot {
+	return {
+		accountId: row.account_id,
+		snapshotDate: row.snapshot_date,
+		balanceCents: row.balance_cents,
+		anchorImportBatchId: row.anchor_import_batch_id,
+		anchorImportOrder: row.anchor_import_order,
+		createdAt: row.created_at,
+		id: row.id
+	};
 }
 
-function latestAccountSnapshot(
-	snapshots: AssetSnapshotRow[],
-	asOfDate: string
-): AssetSnapshotRow | null {
-	return snapshots.filter((snapshot) => snapshot.snapshot_date <= asOfDate).at(-1) ?? null;
-}
-
-function transactionDelta(
-	transactions: AssetTransactionRow[],
-	fromExclusive: string,
-	toInclusive: string
-): number {
-	return transactions
-		.filter(
-			(transaction) =>
-				transaction.booking_date > fromExclusive && transaction.booking_date <= toInclusive
-		)
-		.reduce((sum, transaction) => sum + transaction.amount_cents, 0);
-}
-
-function transactionDeltaFromStart(
-	transactions: AssetTransactionRow[],
-	toInclusive: string
-): number {
-	return transactions
-		.filter((transaction) => transaction.booking_date <= toInclusive)
-		.reduce((sum, transaction) => sum + transaction.amount_cents, 0);
+function mapBalanceTransaction(row: AssetTransactionRow): BalanceTransaction {
+	return {
+		accountId: row.account_id,
+		bookingDate: row.booking_date,
+		amountCents: row.amount_cents,
+		importBatchId: row.import_batch_id,
+		importOrder: row.import_order,
+		createdAt: row.created_at,
+		id: row.id
+	};
 }
 
 function liabilityTotalAsOf(liabilities: NetWorthReport['liabilities'], date: string): number {
@@ -705,9 +650,6 @@ interface MonthlyCategorySummaryRow extends DbRow {
 interface AccountSummaryRow extends DbRow {
 	account_id: string;
 	account_name: string;
-	opening_balance_cents: number;
-	current_balance_cents: number | null;
-	net_to_date_cents: number;
 	income_cents: number;
 	expense_cents: number;
 	net_cents: number;
@@ -723,19 +665,9 @@ interface RecentTransactionRow extends DbRow {
 	classification_status: string;
 }
 
-interface AccountBalanceRow extends DbRow {
-	account_id: string;
-	account_name: string;
-	opening_balance_cents: number;
-	current_balance_cents: number | null;
-	net_to_date_cents: number;
-}
-
 interface AssetAccountRow extends DbRow {
 	account_id: string;
 	name: string;
-	opening_balance_cents: number;
-	current_balance_cents: number | null;
 }
 
 interface AssetInputs {
@@ -748,19 +680,18 @@ interface AssetTransactionRow extends DbRow {
 	account_id: string;
 	booking_date: string;
 	amount_cents: number;
-	balance_after_cents: number | null;
+	import_batch_id: string | null;
+	import_order: number | null;
 	created_at: string;
 	id: string;
-}
-
-interface AssetBalanceAfterRow extends AssetTransactionRow {
-	balance_after_cents: number;
 }
 
 interface AssetSnapshotRow extends DbRow {
 	account_id: string;
 	snapshot_date: string;
 	balance_cents: number;
+	anchor_import_batch_id: string | null;
+	anchor_import_order: number | null;
 	created_at: string;
 	id: string;
 }

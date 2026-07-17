@@ -284,7 +284,7 @@ describe('recurring repository', () => {
 			amountCents: -3000
 		});
 
-		await expect(generateRecurringSuggestions(db)).resolves.toEqual([]);
+		await expect(generateRecurringSuggestions(db, '2026-07-15')).resolves.toEqual([]);
 	});
 
 	it('does not treat similarly priced irregular fuel purchases as a contract', async () => {
@@ -466,7 +466,7 @@ describe('recurring repository', () => {
 				amountCents: 10000
 			});
 		}
-		await expect(generateRecurringSuggestions(db)).resolves.toEqual([]);
+		await expect(generateRecurringSuggestions(db, '2026-07-15')).resolves.toEqual([]);
 	});
 });
 

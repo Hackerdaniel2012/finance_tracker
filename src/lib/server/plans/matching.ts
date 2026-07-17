@@ -1,6 +1,14 @@
-import { advanceDate, isOccurrenceWithinEndDate, occurrenceDate } from '$lib/plans/cadence';
+import {
+	advanceDate,
+	isOccurrenceWithinEndDate,
+	occurrenceDate,
+	previousOccurrenceDate
+} from '$lib/plans/cadence';
 import type { DbClient, DbRow, DbStatement } from '../db-client';
 import type { Plan, PlanCadence, PlanStatus } from './types';
+
+const recurringSuggestionAmountToleranceCents = 50;
+const recurringScheduleDriftDays = 7;
 
 export function canonicalizeCounterparty(value: string | null): string {
 	return (value ?? '')
@@ -23,7 +31,8 @@ export async function reconcilePlans(db: DbClient): Promise<void> {
 						l.as_of_date AS liability_as_of_date,
 						l.status AS liability_status,
 						l.annual_interest_rate_bps AS liability_interest_rate_bps,
-						b.as_of_date AS liability_baseline_date
+						b.as_of_date AS liability_baseline_date,
+						(SELECT COUNT(*) FROM plan_transactions linked WHERE linked.plan_id = p.id) AS linked_transaction_count
 					FROM plans p
 					LEFT JOIN marked_liabilities l ON l.id = p.liability_id
 					LEFT JOIN liability_balance_baselines b ON b.liability_id = p.liability_id
@@ -67,6 +76,11 @@ export async function reconcilePlans(db: DbClient): Promise<void> {
 		for (const [transactionId, [proposal]] of accepted) {
 			const transaction = remainingTransactions.get(transactionId);
 			if (!transaction || proposal.plan.status !== 'active') continue;
+			if (proposal.recoveryAnchor) {
+				proposal.plan.scheduleAnchorDate = proposal.recoveryAnchor;
+				proposal.plan.occurrenceIndex = 0;
+				proposal.plan.nextDate = proposal.recoveryAnchor;
+			}
 			events.push(
 				applyMatch(proposal.plan, transaction, proposal.scheduledDate, proposal.occurrenceIndex)
 			);
@@ -74,17 +88,36 @@ export async function reconcilePlans(db: DbClient): Promise<void> {
 		}
 	}
 
-	const statements: DbStatement[] = events.map((event) => insertMatchStatement(db, event));
+	const statements: DbStatement[] = events.flatMap((event) => {
+		const eventStatements = [insertMatchStatement(db, event)];
+		if (event.categoryIdToAssign) {
+			eventStatements.push(
+				db
+					.prepare(
+						"UPDATE transactions SET category_id=?, classification_status='auto', updated_at=CURRENT_TIMESTAMP WHERE id=? AND category_id IS NULL"
+					)
+					.bind(event.categoryIdToAssign, event.transactionId),
+				db
+					.prepare(
+						`UPDATE transaction_review_flags
+						SET status='resolved', resolved_at=CURRENT_TIMESTAMP
+						WHERE transaction_id=? AND reason='unknown_category' AND status='open'`
+					)
+					.bind(event.transactionId)
+			);
+		}
+		return eventStatements;
+	});
 	for (const plan of plans) {
 		if (!plan.dirty) continue;
 		statements.push(
 			db
 				.prepare(
 					`UPDATE plans
-					SET next_date = ?, schedule_occurrence_index = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+					SET next_date = ?, schedule_anchor_date = ?, schedule_occurrence_index = ?, status = ?, updated_at = CURRENT_TIMESTAMP
 					WHERE id = ?`
 				)
-				.bind(plan.nextDate, plan.occurrenceIndex, plan.status, plan.id)
+				.bind(plan.nextDate, plan.scheduleAnchorDate, plan.occurrenceIndex, plan.status, plan.id)
 		);
 		if (plan.liabilityId && plan.liabilityDirty) {
 			statements.push(
@@ -127,6 +160,8 @@ function applyMatch(
 		liabilityAmountBefore: plan.liabilityAmountCents,
 		liabilityAsOfDateBefore: plan.liabilityAsOfDate,
 		liabilityStatusBefore: plan.liabilityStatus,
+		categoryIdToAssign:
+			plan.categoryId && transaction.category_id === null ? plan.categoryId : null,
 		interestCents: null,
 		principalCents: null
 	};
@@ -154,6 +189,7 @@ function applyMatch(
 		if (!isOccurrenceWithinEndDate(plan.nextDate, plan.endDate)) plan.status = 'done';
 	}
 	if (plan.liabilityAmountCents === 0) plan.status = 'done';
+	plan.linkedTransactionCount += 1;
 	plan.dirty = true;
 	return event;
 }
@@ -200,17 +236,74 @@ function findNextProposal(plan: MutablePlan, transactions: TransactionRow[]): Ma
 			plan.dirty = true;
 			return null;
 		}
-		if (scheduledDate > addDays(latestDate, 3)) return null;
-		const candidates = transactions.filter((transaction) =>
-			matchesOccurrence(plan, transaction, scheduledDate)
-		);
+		if (scheduledDate > addDays(latestDate, recurringScheduleDriftDays)) break;
+		const candidates = occurrenceCandidates(plan, transactions, scheduledDate);
 		if (candidates.length > 1) return null;
 		if (candidates.length === 1)
 			return { plan, transaction: candidates[0], scheduledDate, occurrenceIndex };
 		if (plan.cadence === 'once') return null;
 		occurrenceIndex += 1;
 	}
-	return null;
+	return findRecoveryProposal(plan, transactions);
+}
+
+function findRecoveryProposal(
+	plan: MutablePlan,
+	transactions: TransactionRow[]
+): MatchProposal | null {
+	if (
+		plan.source !== 'recurring_suggestion' ||
+		plan.cadence === 'once' ||
+		plan.liabilityId !== null ||
+		plan.linkedTransactionCount > 0
+	)
+		return null;
+
+	const earliestDate = transactions.reduce(
+		(earliest, transaction) =>
+			transaction.booking_date < earliest ? transaction.booking_date : earliest,
+		transactions[0].booking_date
+	);
+	let recovered: MatchProposal | null = null;
+	for (let steps = 1; steps < 10_000; steps += 1) {
+		const targetOccurrenceIndex = plan.occurrenceIndex - steps;
+		const scheduledDate =
+			targetOccurrenceIndex >= 0
+				? occurrenceDate(plan.scheduleAnchorDate, plan.cadence, targetOccurrenceIndex)
+				: previousOccurrenceDate(
+						plan.scheduleAnchorDate,
+						plan.cadence,
+						-targetOccurrenceIndex
+					);
+		if (scheduledDate < addDays(earliestDate, -recurringScheduleDriftDays)) break;
+		const candidates = occurrenceCandidates(plan, transactions, scheduledDate);
+		if (candidates.length > 1) return null;
+		if (candidates.length === 1) {
+			const rebased = targetOccurrenceIndex < 0;
+			recovered = {
+				plan,
+				transaction: candidates[0],
+				scheduledDate,
+				occurrenceIndex: rebased ? 0 : targetOccurrenceIndex,
+				...(rebased ? { recoveryAnchor: scheduledDate } : {})
+			};
+		}
+	}
+	return recovered;
+}
+
+function occurrenceCandidates(
+	plan: MutablePlan,
+	transactions: TransactionRow[],
+	scheduledDate: string
+): TransactionRow[] {
+	const candidates = transactions.filter((transaction) =>
+		matchesOccurrence(plan, transaction, scheduledDate)
+	);
+	const exact = candidates.filter(
+		(transaction) => Math.abs(transaction.amount_cents) === plan.amountCents
+	);
+	return exact.length > 0 ? exact : candidates;
 }
 
 function matchesOccurrence(
@@ -221,14 +314,24 @@ function matchesOccurrence(
 	if ((plan.direction === 'expense') !== transaction.amount_cents < 0) return false;
 	if (plan.liabilityBaselineDate && transaction.booking_date <= plan.liabilityBaselineDate)
 		return false;
-	if (Math.abs(transaction.amount_cents) !== plan.amountCents) return false;
-	const allowedDrift = plan.cadence === 'daily' ? 0 : 3;
+	if (!matchesPlanAmount(plan, transaction.amount_cents)) return false;
+	const allowedDrift = plan.cadence === 'daily' ? 0 : recurringScheduleDriftDays;
 	if (Math.abs(daysBetween(scheduledDate, transaction.booking_date)) > allowedDrift) return false;
 	if (plan.accountId && plan.accountId !== transaction.account_id) return false;
-	if (plan.categoryId && plan.categoryId !== transaction.category_id) return false;
+	if (plan.categoryId && transaction.category_id && plan.categoryId !== transaction.category_id)
+		return false;
 	return (
 		!plan.counterparty ||
 		canonicalizeCounterparty(plan.counterparty) === canonicalizeCounterparty(transaction.payee)
+	);
+}
+
+function matchesPlanAmount(plan: MutablePlan, transactionAmountCents: number): boolean {
+	const difference = Math.abs(Math.abs(transactionAmountCents) - plan.amountCents);
+	return (
+		difference === 0 ||
+		(plan.source === 'recurring_suggestion' &&
+			difference <= recurringSuggestionAmountToleranceCents)
 	);
 }
 
@@ -246,6 +349,7 @@ function completeIfPastEnd(plan: MutablePlan): void {
 function toMutablePlan(row: PlanRow): MutablePlan {
 	return {
 		id: row.id,
+		source: row.source,
 		accountId: row.account_id,
 		categoryId: row.category_id,
 		counterparty: row.counterparty,
@@ -263,6 +367,7 @@ function toMutablePlan(row: PlanRow): MutablePlan {
 		liabilityStatus: row.liability_status,
 		liabilityInterestRateBps: row.liability_interest_rate_bps,
 		liabilityBaselineDate: row.liability_baseline_date,
+		linkedTransactionCount: row.linked_transaction_count,
 		dirty: false,
 		liabilityDirty: false
 	};
@@ -310,6 +415,7 @@ export function calculatePeriodicInterest(
 
 interface MutablePlan {
 	id: string;
+	source: Plan['source'];
 	accountId: string | null;
 	categoryId: string | null;
 	counterparty: string | null;
@@ -327,6 +433,7 @@ interface MutablePlan {
 	liabilityStatus: 'active' | 'cleared' | null;
 	liabilityInterestRateBps: number | null;
 	liabilityBaselineDate: string | null;
+	linkedTransactionCount: number;
 	dirty: boolean;
 	liabilityDirty: boolean;
 }
@@ -343,6 +450,7 @@ interface MatchEvent {
 	liabilityAmountBefore: number | null;
 	liabilityAsOfDateBefore: string | null;
 	liabilityStatusBefore: 'active' | 'cleared' | null;
+	categoryIdToAssign: string | null;
 	interestCents: number | null;
 	principalCents: number | null;
 }
@@ -352,10 +460,12 @@ interface MatchProposal {
 	transaction: TransactionRow;
 	scheduledDate: string;
 	occurrenceIndex: number;
+	recoveryAnchor?: string;
 }
 
 interface PlanRow extends DbRow {
 	id: string;
+	source: Plan['source'];
 	account_id: string | null;
 	category_id: string | null;
 	counterparty: string | null;
@@ -373,6 +483,7 @@ interface PlanRow extends DbRow {
 	liability_status: 'active' | 'cleared' | null;
 	liability_interest_rate_bps: number | null;
 	liability_baseline_date: string | null;
+	linked_transaction_count: number;
 }
 
 interface TransactionRow extends DbRow {

@@ -3,6 +3,20 @@ export type PlanCadence =
 	'once' | 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
 export type PlanStatus = 'active' | 'paused' | 'done' | 'cancelled';
 export type PlanSource = 'manual' | 'migrated' | 'recurring_suggestion';
+export type PlanTransactionMatchKind = 'evidence' | 'automatic';
+
+export interface PlanTransaction {
+	transactionId: string;
+	bookingDate: string;
+	amountCents: number;
+	payee: string | null;
+	description: string | null;
+	categoryName: string | null;
+	matchKind: PlanTransactionMatchKind;
+	scheduledDate: string | null;
+	interestCents: number | null;
+	principalCents: number | null;
+}
 
 export interface Plan {
 	id: string;
@@ -24,6 +38,7 @@ export interface Plan {
 	note: string | null;
 	transactionCount: number;
 	lastTransactionDate: string | null;
+	transactions: PlanTransaction[];
 	scheduleAnchorDate: string;
 	scheduleOccurrenceIndex: number;
 	manualStatus: PlanStatus;

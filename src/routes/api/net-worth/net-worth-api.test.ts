@@ -18,11 +18,8 @@ beforeEach(async () => {
 
 describe('/api/net-worth', () => {
 	it('returns net worth accounts, liabilities, and points', async () => {
-		const account = await createAccount(db, {
-			name: 'Savings',
-			openingBalanceCents: 100000,
-			currentBalanceCents: 125000
-		});
+		const account = await createAccount(db, { name: 'Savings' });
+		await addSnapshot(account.id, 125000);
 		await db
 			.prepare(
 				`INSERT INTO marked_liabilities (id, account_id, name, amount_cents, as_of_date)
@@ -58,14 +55,10 @@ describe('/api/net-worth', () => {
 	});
 
 	it('filters net worth by account id', async () => {
-		const checking = await createAccount(db, {
-			name: 'Checking',
-			openingBalanceCents: 100000
-		});
-		const savings = await createAccount(db, {
-			name: 'Savings',
-			openingBalanceCents: 200000
-		});
+		const checking = await createAccount(db, { name: 'Checking' });
+		const savings = await createAccount(db, { name: 'Savings' });
+		await addSnapshot(checking.id, 100000);
+		await addSnapshot(savings.id, 200000);
 		await db
 			.prepare(
 				`INSERT INTO marked_liabilities (id, account_id, name, amount_cents, as_of_date)
@@ -111,6 +104,16 @@ describe('/api/net-worth', () => {
 		});
 	});
 });
+
+async function addSnapshot(accountId: string, balanceCents: number) {
+	await db
+		.prepare(
+			`INSERT INTO account_balance_snapshots (id, account_id, snapshot_date, balance_cents, source)
+			VALUES (?, ?, '2026-07-01', ?, 'manual')`
+		)
+		.bind(crypto.randomUUID(), accountId, balanceCents)
+		.run();
+}
 
 function event(url: string) {
 	return {

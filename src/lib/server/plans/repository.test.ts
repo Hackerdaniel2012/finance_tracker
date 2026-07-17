@@ -79,6 +79,37 @@ describe('plans repository', () => {
 		expect((await getPlan(db, once.id))?.lastTransactionDate).toBe('2026-07-11');
 		expect((await getPlan(db, recurring.id))?.nextDate).toBe('2026-08-10');
 	});
+	it('matches recurring income up to seven days early but not eight days early', async () => {
+		const { db } = await setup();
+		const withinWindow = await createPlan(db, {
+			accountId: 'account',
+			direction: 'income',
+			cadence: 'monthly',
+			amountCents: 250000,
+			nextDate: '2026-07-31',
+			counterparty: 'Early Employer'
+		});
+		const outsideWindow = await createPlan(db, {
+			accountId: 'account',
+			direction: 'income',
+			cadence: 'monthly',
+			amountCents: 240000,
+			nextDate: '2026-07-31',
+			counterparty: 'Too Early Employer'
+		});
+		await db
+			.prepare(
+				"INSERT INTO transactions (id,account_id,dedupe_key,booking_date,amount_cents,payee,search_text) VALUES ('seven-days-early','account','seven-days-early','2026-07-24',250000,'Early Employer',''),('eight-days-early','account','eight-days-early','2026-07-23',240000,'Too Early Employer','')"
+			)
+			.run();
+
+		await reconcilePlans(db);
+
+		expect((await getPlan(db, withinWindow.id))?.lastTransactionDate).toBe('2026-07-24');
+		expect((await getPlan(db, withinWindow.id))?.nextDate).toBe('2026-08-31');
+		expect((await getPlan(db, outsideWindow.id))?.transactionCount).toBe(0);
+		expect((await getPlan(db, outsideWindow.id))?.nextDate).toBe('2026-07-31');
+	});
 	it('does not match an ambiguous transaction', async () => {
 		const { db } = await setup();
 		const first = await createPlan(db, {
@@ -103,6 +134,204 @@ describe('plans repository', () => {
 		await reconcilePlans(db);
 		expect((await getPlan(db, first.id))?.status).toBe('active');
 		expect((await getPlan(db, second.id))?.status).toBe('active');
+	});
+
+	it('recovers a confirmed recurring plan after its evidence transaction was deleted and reimported', async () => {
+		const { db, database } = await setup();
+		const plan = await createPlan(db, {
+			accountId: 'account',
+			categoryId: 'expense',
+			counterparty: 'OPENAI *CHATGPT SUBSCR',
+			direction: 'expense',
+			cadence: 'monthly',
+			amountCents: 2063,
+			nextDate: '2026-08-05'
+		});
+		await db
+			.prepare("UPDATE plans SET source='recurring_suggestion' WHERE id=?")
+			.bind(plan.id)
+			.run();
+		await db
+			.prepare(
+				"INSERT INTO transactions (id,account_id,dedupe_key,booking_date,amount_cents,payee,description,search_text) VALUES ('old-evidence','account','old-evidence','2026-07-05',-2063,'OPENAI *CHATGPT SUBSCR','Old evidence','')"
+			)
+			.run();
+		await db
+			.prepare(
+				"INSERT INTO plan_transactions (plan_id,transaction_id,match_kind) VALUES (?,'old-evidence','evidence')"
+			)
+			.bind(plan.id)
+			.run();
+		await db.prepare("DELETE FROM transactions WHERE id='old-evidence'").run();
+		await db
+			.prepare(
+				"INSERT INTO transactions (id,account_id,dedupe_key,booking_date,amount_cents,payee,description,search_text) VALUES ('reimported','account','reimported','2026-07-05',-2084,'OPENAI *CHATGPT SUBSCR','OPENAI *CHATGPT SUBSCR','')"
+			)
+			.run();
+		await db
+			.prepare(
+				"INSERT INTO transaction_review_flags (id,transaction_id,reason,status) VALUES ('review','reimported','unknown_category','open')"
+			)
+			.run();
+
+		await reconcilePlans(db);
+
+		const recovered = await getPlan(db, plan.id);
+		expect(recovered).toMatchObject({
+			nextDate: '2026-08-05',
+			scheduleAnchorDate: '2026-07-05',
+			scheduleOccurrenceIndex: 1,
+			transactionCount: 1,
+			lastTransactionDate: '2026-07-05',
+			transactions: [
+				{
+					transactionId: 'reimported',
+					bookingDate: '2026-07-05',
+					amountCents: -2084,
+					categoryName: 'Expense',
+					matchKind: 'automatic',
+					scheduledDate: '2026-07-05'
+				}
+			]
+		});
+		expect(
+			database.exec(
+				"SELECT category_id, classification_status FROM transactions WHERE id='reimported'"
+			)[0]?.values
+		).toEqual([['expense', 'auto']]);
+		expect(
+			database.exec(
+				"SELECT reason, status, resolved_at IS NOT NULL FROM transaction_review_flags WHERE transaction_id='reimported'"
+			)[0]?.values
+		).toEqual([['unknown_category', 'resolved', 1]]);
+	});
+
+	it('preserves non-category review flags when assigning plan categories', async () => {
+		const { db, database } = await setup();
+		await createPlan(db, {
+			accountId: 'account',
+			categoryId: 'expense',
+			counterparty: 'Manual Review Merchant',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1200,
+			nextDate: '2026-07-10'
+		});
+		await createPlan(db, {
+			accountId: 'account',
+			categoryId: 'expense',
+			counterparty: 'Parse Warning Merchant',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1300,
+			nextDate: '2026-07-10'
+		});
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text
+				) VALUES
+					('manual-review', 'account', 'manual-review', '2026-07-10', -1200, 'Manual Review Merchant', ''),
+					('parse-warning', 'account', 'parse-warning', '2026-07-10', -1300, 'Parse Warning Merchant', '')`
+			)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO transaction_review_flags (id, transaction_id, reason, status) VALUES
+					('manual-flag', 'manual-review', 'manual_review', 'open'),
+					('parse-flag', 'parse-warning', 'parse_warning', 'open')`
+			)
+			.run();
+
+		await reconcilePlans(db);
+
+		expect(
+			database.exec(
+				'SELECT reason, status, resolved_at FROM transaction_review_flags ORDER BY reason'
+			)[0]?.values
+		).toEqual([
+			['manual_review', 'open', null],
+			['parse_warning', 'open', null]
+		]);
+		expect(
+			database.exec(
+				"SELECT COUNT(*) FROM transactions WHERE category_id='expense' AND classification_status='auto'"
+			)[0]?.values
+		).toEqual([[2]]);
+	});
+
+	it('keeps the original month-end anchor when recovering an earlier occurrence', async () => {
+		const { db } = await setup();
+		const plan = await createPlan(db, {
+			accountId: 'account',
+			counterparty: 'Month End Employer',
+			direction: 'income',
+			cadence: 'monthly',
+			amountCents: 500000,
+			nextDate: '2026-01-31'
+		});
+		await db
+			.prepare(
+				`UPDATE plans
+				SET source = 'recurring_suggestion', next_date = '2026-02-28',
+					schedule_anchor_date = '2026-01-31', schedule_occurrence_index = 1
+				WHERE id = ?`
+			)
+			.bind(plan.id)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text
+				) VALUES ('january-pay', 'account', 'january-pay', '2026-01-31', 500000,
+					'Month End Employer', '')`
+			)
+			.run();
+
+		await reconcilePlans(db);
+		expect(await getPlan(db, plan.id)).toMatchObject({
+			scheduleAnchorDate: '2026-01-31',
+			scheduleOccurrenceIndex: 1,
+			nextDate: '2026-02-28',
+			transactionCount: 1
+		});
+
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, account_id, dedupe_key, booking_date, amount_cents, payee, search_text
+				) VALUES ('february-pay', 'account', 'february-pay', '2026-02-28', 500000,
+					'Month End Employer', '')`
+			)
+			.run();
+		await reconcilePlans(db);
+		expect(await getPlan(db, plan.id)).toMatchObject({
+			scheduleAnchorDate: '2026-01-31',
+			scheduleOccurrenceIndex: 2,
+			nextDate: '2026-03-31',
+			transactionCount: 2
+		});
+	});
+
+	it('keeps amount tolerance exclusive to confirmed recurring suggestions', async () => {
+		const { db } = await setup();
+		const plan = await createPlan(db, {
+			accountId: 'account',
+			counterparty: 'Variable service',
+			direction: 'expense',
+			cadence: 'monthly',
+			amountCents: 2000,
+			nextDate: '2026-07-05'
+		});
+		await db
+			.prepare(
+				"INSERT INTO transactions (id,account_id,dedupe_key,booking_date,amount_cents,payee,search_text) VALUES ('manual-drift','account','manual-drift','2026-07-05',-2021,'Variable service','')"
+			)
+			.run();
+
+		await reconcilePlans(db);
+
+		expect((await getPlan(db, plan.id))?.transactionCount).toBe(0);
 	});
 	it('reduces a linked liability by principal while retaining the interest portion', async () => {
 		const { db, database } = await setup();

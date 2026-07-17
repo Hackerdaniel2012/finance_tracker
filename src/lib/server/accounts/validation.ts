@@ -3,19 +3,19 @@ import type { CreateAccountInput, UpdateAccountInput } from './types';
 
 export function parseCreateAccountInput(value: unknown): CreateAccountInput {
 	const body = asObject(value);
+	assertNoLegacyBalanceFields(body);
 	const name = requiredString(body.name, 'name');
 
 	return {
 		name,
 		institution: optionalNullableString(body.institution, 'institution'),
-		openingBalanceCents: optionalInteger(body.openingBalanceCents, 'openingBalanceCents') ?? 0,
-		currentBalanceCents: optionalNullableInteger(body.currentBalanceCents, 'currentBalanceCents'),
 		displayOrder: optionalInteger(body.displayOrder, 'displayOrder') ?? 0
 	};
 }
 
 export function parseUpdateAccountInput(value: unknown): UpdateAccountInput {
 	const body = asObject(value);
+	assertNoLegacyBalanceFields(body);
 	const id = requiredString(body.id, 'id');
 	const input: UpdateAccountInput = { id };
 
@@ -25,17 +25,6 @@ export function parseUpdateAccountInput(value: unknown): UpdateAccountInput {
 
 	if ('institution' in body) {
 		input.institution = optionalNullableString(body.institution, 'institution');
-	}
-
-	if ('openingBalanceCents' in body) {
-		input.openingBalanceCents = requiredInteger(body.openingBalanceCents, 'openingBalanceCents');
-	}
-
-	if ('currentBalanceCents' in body) {
-		input.currentBalanceCents = optionalNullableInteger(
-			body.currentBalanceCents,
-			'currentBalanceCents'
-		);
 	}
 
 	if ('displayOrder' in body) {
@@ -93,22 +82,16 @@ function optionalInteger(value: unknown, field: string): number | undefined {
 	return requiredInteger(value, field);
 }
 
-function optionalNullableInteger(value: unknown, field: string): number | null | undefined {
-	if (value === undefined) {
-		return undefined;
-	}
-
-	if (value === null) {
-		return null;
-	}
-
-	return requiredInteger(value, field);
-}
-
 function requiredInteger(value: unknown, field: string): number {
 	if (typeof value !== 'number' || !Number.isInteger(value)) {
 		throw new ValidationError(`${field} must be an integer`);
 	}
 
 	return value;
+}
+
+function assertNoLegacyBalanceFields(body: Record<string, unknown>): void {
+	if ('openingBalanceCents' in body || 'currentBalanceCents' in body) {
+		throw new ValidationError('Account balances must be initialized through an import');
+	}
 }

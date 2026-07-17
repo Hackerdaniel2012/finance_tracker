@@ -2,14 +2,16 @@ import { json } from '@sveltejs/kit';
 import { jsonError, getRequestDatabase } from '$lib/server/api';
 import { ValidationError } from '$lib/server/accounts/errors';
 import { confirmImport } from '$lib/server/imports/confirm';
+import { parseImportAccountAssignmentsJson } from '$lib/server/imports/validation';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async (event) => {
 	try {
 		const form = await readFormData(event.request);
-		const accountId = getFormString(form, 'accountId');
 		const adapterId = getFormString(form, 'adapterId');
 		const expectedHash = getFormString(form, 'expectedHash');
+		const expectedConfigurationHash = getFormString(form, 'expectedConfigurationHash');
+		const assignments = getAssignments(form);
 		const file = form.get('file');
 
 		if (!(file instanceof Blob)) {
@@ -17,9 +19,10 @@ export const POST: RequestHandler = async (event) => {
 		}
 
 		const report = await confirmImport(getRequestDatabase(event), {
-			accountId,
 			adapterId,
 			expectedHash,
+			expectedConfigurationHash,
+			assignments,
 			csv: await file.text()
 		});
 
@@ -44,4 +47,9 @@ function getFormString(form: FormData, field: string): string {
 	}
 
 	return value;
+}
+
+function getAssignments(form: FormData) {
+	const value = getFormString(form, 'assignments');
+	return parseImportAccountAssignmentsJson(value);
 }

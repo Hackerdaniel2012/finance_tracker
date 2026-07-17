@@ -8,7 +8,7 @@ import {
 import { createAccount } from '../accounts/repository';
 import { createCategoryRule } from '../categories/repository';
 import type { DbClient } from '../db-client';
-import { confirmImport } from '../imports/confirm';
+import { importIntoExistingAccount } from '../imports/test-support';
 import { sha256Hex } from '../imports/shared';
 import { reconcilePlans } from '../plans/matching';
 import { createPlan, getPlan } from '../plans/repository';
@@ -546,10 +546,11 @@ async function seedTransactions() {
 		'"10.07.26";"10.07.26";"Gebucht";"Employer";"Me";"Salary";"Eingang";"DE";"2500,00";"";"";"ref-salary"'
 	]);
 
-	await confirmImport(db, {
+	await importIntoExistingAccount(db, {
 		accountId: importAccount.accountId,
 		adapterId: importAccount.bankId,
 		csv,
+		reportedBalanceCents: 0,
 		expectedHash: await sha256Hex(csv)
 	});
 }

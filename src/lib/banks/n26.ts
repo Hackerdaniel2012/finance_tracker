@@ -47,6 +47,7 @@ export const n26Adapter: BankAdapter = {
 		const dedupeOccurrences = new Map<string, number>();
 
 		for (const record of parsed.records) {
+			const sourceAccountName = record.values['Account Name']?.trim();
 			const bookingDate = parseIsoDate(record.values['Booking Date'] ?? '');
 			const amountCents = parseEuroCents(record.values['Amount (EUR)'] ?? '');
 
@@ -109,7 +110,8 @@ export const n26Adapter: BankAdapter = {
 					bankId: 'n26',
 					rowNumber: record.rowNumber,
 					rawType: record.values.Type,
-					subaccount: record.values['Account Name'] || undefined
+					sourceAccountKey: sourceAccountName || undefined,
+					sourceAccountLabel: sourceAccountName || undefined
 				}
 			});
 		}

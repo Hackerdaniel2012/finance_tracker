@@ -39,6 +39,8 @@ export const dkbAdapter: BankAdapter = {
 		}
 
 		const parsed = parseDelimitedCsv(csv, { delimiter: ';', headerRowIndex });
+		const metadata = parseDkbMetadata(csv, headerRowIndex);
+		const sourceAccountKey = metadata.Girokonto?.trim() || undefined;
 		const missingColumns = missingRequiredColumns(parsed.headers, requiredColumns);
 		if (missingColumns.length > 0) {
 			return {
@@ -52,7 +54,7 @@ export const dkbAdapter: BankAdapter = {
 					)
 				],
 				skippedRows: parsed.records.length,
-				metadata: parseDkbMetadata(csv, headerRowIndex)
+				metadata
 			};
 		}
 
@@ -116,19 +118,21 @@ export const dkbAdapter: BankAdapter = {
 				dedupeKey: externalId
 					? buildDkbReferenceKey(externalId, bookingDate, valueDate, amountCents)
 					: stableFingerprint([
-						bookingDate,
-						valueDate,
-						amountCents,
-						payer,
-						recipient,
-						record.values.Verwendungszweck,
-						record.values.IBAN
-					]),
+							bookingDate,
+							valueDate,
+							amountCents,
+							payer,
+							recipient,
+							record.values.Verwendungszweck,
+							record.values.IBAN
+						]),
 				source: {
 					bankId: 'dkb_girocard',
 					rowNumber: record.rowNumber,
 					rawType: record.values.Umsatztyp,
-					externalId
+					externalId,
+					sourceAccountKey,
+					sourceAccountLabel: sourceAccountKey ? 'Girokonto' : undefined
 				}
 			});
 		}
@@ -138,7 +142,7 @@ export const dkbAdapter: BankAdapter = {
 			rows,
 			errors,
 			skippedRows: parsed.records.length - rows.length,
-			metadata: parseDkbMetadata(csv, headerRowIndex)
+			metadata
 		};
 	}
 };

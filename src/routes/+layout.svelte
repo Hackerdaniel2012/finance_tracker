@@ -12,7 +12,7 @@
 	let mobileNavigationOpen = $state(false);
 	let menuOpen = $state(false);
 	const toolbarControlClass =
-		'rounded-full border border-zinc-200 bg-white/95 text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 hover:text-zinc-950';
+		'rounded-full border border-zinc-200 bg-white/95 text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950';
 
 	function isActive(path: string): boolean {
 		return path === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(path);
@@ -64,7 +64,7 @@
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
-<div class="min-h-screen min-w-[320px] bg-stone-50 text-zinc-950">
+<div class="min-h-screen min-w-[320px] bg-white text-zinc-950">
 	<header class="toolbar-backdrop sticky top-0 z-30 px-4 py-4">
 		{#if menuOpen || mobileNavigationOpen}
 			<button
@@ -161,7 +161,7 @@
 				{#if menuOpen}
 					<section
 						id="desktop-menu"
-						class="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-64 rounded-ui border border-zinc-200 bg-white p-4 shadow-lg"
+						class="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-64 rounded-ui border border-zinc-200 bg-white p-4"
 					>
 						<p class="px-2 text-sm font-medium text-zinc-700">{m.switch_language()}</p>
 						<div class="mt-4 flex items-center justify-between gap-3 px-2">
@@ -174,7 +174,7 @@
 								aria-checked={currentLocale === 'de'}
 								onclick={() => switchLanguage(currentLocale === 'de' ? 'en' : 'de')}
 							>
-								<span class={`absolute top-1 size-5 rounded-full bg-white shadow-sm transition-transform ${currentLocale === 'de' ? 'translate-x-6' : 'translate-x-1'}`}></span>
+								<span class={`absolute top-1 size-5 rounded-full bg-white transition-transform ${currentLocale === 'de' ? 'translate-x-6' : 'translate-x-1'}`}></span>
 							</button>
 							<span class={`text-sm font-medium ${currentLocale === 'de' ? 'text-blue-600' : 'text-zinc-500'}`}>{m.language_german()}</span>
 						</div>
@@ -186,7 +186,7 @@
 			<div class="col-span-3 grid grid-cols-[4rem_minmax(0,1fr)_4rem] items-center gap-2 min-[950px]:hidden">
 				<div class="relative col-start-1 h-11 w-11 justify-self-start">
 					<button
-					class="flex h-full w-full items-center justify-center rounded-full border border-zinc-200 bg-white/95 text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 hover:text-zinc-950"
+					class="flex h-full w-full items-center justify-center rounded-full border border-zinc-200 bg-white/95 text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950"
 					type="button"
 					aria-label={m.toolbar_menu()}
 					aria-expanded={menuOpen}
@@ -203,7 +203,7 @@
 					{#if menuOpen}
 						<section
 							id="mobile-menu"
-							class="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-64 rounded-ui border border-zinc-200 bg-white p-4 shadow-lg"
+							class="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-64 rounded-ui border border-zinc-200 bg-white p-4"
 						>
 							<p class="px-2 text-sm font-medium text-zinc-700">{m.switch_language()}</p>
 							<div class="mt-4 flex items-center justify-between gap-3 px-2">
@@ -216,7 +216,7 @@
 									aria-checked={currentLocale === 'de'}
 									onclick={() => switchLanguage(currentLocale === 'de' ? 'en' : 'de')}
 								>
-									<span class={`absolute top-1 size-5 rounded-full bg-white shadow-sm transition-transform ${currentLocale === 'de' ? 'translate-x-6' : 'translate-x-1'}`}></span>
+									<span class={`absolute top-1 size-5 rounded-full bg-white transition-transform ${currentLocale === 'de' ? 'translate-x-6' : 'translate-x-1'}`}></span>
 								</button>
 								<span class={`text-sm font-medium ${currentLocale === 'de' ? 'text-blue-600' : 'text-zinc-500'}`}>{m.language_german()}</span>
 							</div>
@@ -225,7 +225,7 @@
 				</div>
 				<div class="relative col-start-2 w-fit max-w-full justify-self-center">
 					<button
-						class="flex h-11 w-fit max-w-full items-center gap-3 rounded-full border border-zinc-200 bg-white/95 px-5 text-left text-blue-600 shadow-sm transition-colors hover:bg-zinc-50"
+						class="flex h-11 w-fit max-w-full items-center gap-3 rounded-full border border-zinc-200 bg-white/95 px-5 text-left text-blue-600 transition-colors hover:bg-zinc-50"
 						type="button"
 						aria-label={m.primary_navigation()}
 						aria-expanded={mobileNavigationOpen}
@@ -269,7 +269,7 @@
 					{#if mobileNavigationOpen}
 						<nav
 							id="mobile-navigation-picker"
-							class="absolute left-1/2 top-[calc(100%+0.5rem)] z-40 w-max min-w-[18rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-hidden rounded-ui border border-zinc-200 bg-white p-4 shadow-lg"
+							class="absolute left-1/2 top-[calc(100%+0.5rem)] z-40 w-max min-w-[18rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-hidden rounded-ui border border-zinc-200 bg-white p-4"
 							aria-label={m.primary_navigation()}
 						>
 							<a

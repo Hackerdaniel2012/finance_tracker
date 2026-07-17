@@ -14,7 +14,7 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	};
 
 	await navigate('/accounts');
-	await expect(page.getByText(/^Ready$|^Bereit$/i)).toBeVisible();
+	await expect(page.getByRole('button', { name: /create account|konto erstellen/i })).toBeVisible();
 
 	await page.getByLabel(/account name|kontoname/i).fill(accountName);
 	const institutionPicker = page.getByRole('button', { name: /institution/i });
@@ -32,25 +32,35 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	await expect(page.getByRole('heading', { name: accountName })).toBeVisible();
 
 	await navigate('/imports');
-	await expect(page.getByText(/^Imports ready$|^Importe bereit$/i)).toBeVisible();
+	await expect(
+		page.getByRole('button', { name: /detect accounts|konten erkennen/i })
+	).toBeVisible();
 	const importForm = page
-		.getByRole('button', { name: /preview import|import pruefen/i })
+		.getByRole('button', { name: /detect accounts|konten erkennen/i })
 		.locator('xpath=ancestor::form');
-	await importForm.getByRole('button', { name: /^account$|^konto$/i }).click();
-	await page.getByRole('option', { name: accountName }).click();
 	await importForm.getByRole('button', { name: /csv scheme|csv-schema/i }).click();
 	await page.getByRole('option', { name: /dkb giro card|dkb giro card/i }).click();
 	await importForm
 		.getByLabel(/csv file|csv-datei/i)
 		.setInputFiles(resolve('tests/fixtures/dkb-giro-basic.csv'));
-	await importForm.getByRole('button', { name: /preview import|import pruefen/i }).click();
-	await expect(
-		page.getByRole('button', { name: /confirm import|import bestaetigen/i })
-	).toBeVisible();
+	await importForm.getByRole('button', { name: /detect accounts|konten erkennen/i }).click();
+	const accountGroup = page
+		.getByRole('heading', { name: /girokonto|csv account/i })
+		.locator('xpath=ancestor::article[1]');
+	await accountGroup.getByRole('button', { name: /target account|zielkonto/i }).click();
+	await page
+		.getByRole('option', { name: /use existing account|bestehendes konto verwenden/i })
+		.click();
+	await accountGroup.getByRole('button', { name: /^account$|^konto$/i }).click();
+	await page.getByRole('option', { name: accountName, exact: true }).click();
+	await accountGroup.getByLabel(/entered balance|eingegebener kontostand/i).fill('1000.00');
+	await page
+		.getByRole('button', { name: /validate account setup|kontoeinrichtung prüfen/i })
+		.click();
 	await expect(page.getByText(/Example Market/i).first()).toBeVisible();
 
-	await page.getByRole('button', { name: /confirm import|import bestaetigen/i }).click();
-	await expect(page.getByRole('heading', { name: `${accountName} / DKB Giro Card` })).toBeVisible({
+	await page.getByRole('button', { name: /confirm import|import bestätigen/i }).click();
+	await expect(page.getByText(new RegExp(`DKB Giro Card.*${accountName}`)).first()).toBeVisible({
 		timeout: 60_000
 	});
 	await expect(
@@ -63,7 +73,9 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	await expect(page.getByText(/Example Market/i).first()).toBeVisible();
 
 	await navigate('/review');
-	await expect(page.getByText(/^Review queue ready$|^Pruefung bereit$/i)).toBeVisible();
+	await expect(
+		page.getByRole('heading', { name: /unknown review queue|unbekannte transaktionen/i })
+	).toBeVisible();
 	const reviewQueue = page
 		.getByRole('heading', { name: /unknown review queue|unbekannte transaktionen/i })
 		.locator('xpath=ancestor::section[1]');
@@ -137,6 +149,10 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	expect((await createPlanResponse).ok()).toBe(true);
 	const planRow = page.getByText(planName, { exact: true }).locator('xpath=ancestor::article[1]');
 	await expect(planRow).toContainText(/done|erledigt/i);
+	await planRow.getByRole('button', { name: /edit|bearbeiten/i }).click();
+	await expect(planRow).toContainText(/linked transactions|verknuepfte transaktionen/i);
+	await expect(planRow).toContainText('Synthetic groceries');
+	await expect(planRow).toContainText(/automatically matched|automatisch zugeordnet/i);
 
 	await navigate('/imports');
 	const deleteImportResponse = page.waitForResponse(

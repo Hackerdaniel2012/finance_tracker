@@ -17,15 +17,13 @@ export function parseReportDateRange(url: URL, today = new Date()): ReportDateRa
 
 export function parseNetWorthReportOptions(url: URL): NetWorthReportOptions {
 	return {
-		accountId: optionalQueryString(url, 'accountId'),
-		subaccount: optionalQueryString(url, 'subaccount')
+		accountId: optionalQueryString(url, 'accountId')
 	};
 }
 
 export function parseSummaryReportOptions(url: URL): SummaryReportOptions {
 	return {
-		accountId: optionalQueryString(url, 'accountId'),
-		subaccount: optionalQueryString(url, 'subaccount')
+		accountId: optionalQueryString(url, 'accountId')
 	};
 }
 

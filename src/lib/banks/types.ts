@@ -41,6 +41,7 @@ export interface NormalizedTransaction {
 		rowNumber: number;
 		rawType?: string;
 		externalId?: string;
-		subaccount?: string;
+		sourceAccountKey?: string;
+		sourceAccountLabel?: string;
 	};
 }

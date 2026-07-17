@@ -27,9 +27,7 @@ describe('/api/accounts', () => {
 		const createResponse = await POST(
 			event({
 				name: 'Main Giro',
-				institution: 'DKB',
-				openingBalanceCents: 12345,
-				currentBalanceCents: 23456
+				institution: 'DKB'
 			})
 		);
 
@@ -39,15 +37,11 @@ describe('/api/accounts', () => {
 				id: string;
 				name: string;
 				institution: string;
-				openingBalanceCents: number;
-				currentBalanceCents: number;
 			};
 		};
 		expect(created.account).toMatchObject({
 			name: 'Main Giro',
-			institution: 'DKB',
-			openingBalanceCents: 12345,
-			currentBalanceCents: 23456
+			institution: 'DKB'
 		});
 
 		const patchResponse = await PATCH(event({ id: created.account.id, name: 'Household Giro' }));
@@ -86,6 +80,8 @@ describe('/api/accounts', () => {
 		const invalidCreate = await POST(event({ name: '' }));
 		expect(invalidCreate.status).toBe(400);
 		await expect(invalidCreate.json()).resolves.toEqual({ error: 'name is required' });
+		const legacyBalance = await POST(event({ name: 'Legacy', currentBalanceCents: 100 }));
+		expect(legacyBalance.status).toBe(400);
 
 		const missingPatch = await PATCH(event({ id: 'missing', name: 'Nope' }));
 		expect(missingPatch.status).toBe(404);
@@ -99,12 +95,12 @@ describe('/api/accounts', () => {
 		await expect(response.json()).resolves.toEqual({ error: 'Request body must be valid JSON' });
 	});
 
-	it('includes discovered subaccounts for N26 accounts', async () => {
+	it('does not expose source account keys as account filters', async () => {
 		const account = await createAccount(db, { name: 'N26' });
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+					id, account_id, dedupe_key, booking_date, amount_cents, search_text, source_account_key
 				) VALUES (?, ?, ?, ?, ?, ?, ?)`
 			)
 			.bind('txn-1', account.id, 'dedupe-1', '2026-07-08', -100, 'coffee', 'Hauptkonto')
@@ -112,7 +108,7 @@ describe('/api/accounts', () => {
 		await db
 			.prepare(
 				`INSERT INTO transactions (
-					id, account_id, dedupe_key, booking_date, amount_cents, search_text, subaccount
+					id, account_id, dedupe_key, booking_date, amount_cents, search_text, source_account_key
 				) VALUES (?, ?, ?, ?, ?, ?, ?)`
 			)
 			.bind('txn-2', account.id, 'dedupe-2', '2026-07-09', -200, 'groceries', '20k in 2023')
@@ -120,15 +116,9 @@ describe('/api/accounts', () => {
 
 		const response = await GET(event());
 
-		await expect(response.json()).resolves.toMatchObject({
-			accounts: [
-				{
-					id: account.id,
-					balanceCents: -300,
-					subaccounts: ['20k in 2023', 'Hauptkonto']
-				}
-			]
-		});
+		const payload = (await response.json()) as { accounts: Array<Record<string, unknown>> };
+		expect(payload).toMatchObject({ accounts: [{ id: account.id, balanceCents: null, balanceInitialized: false }] });
+		expect(payload.accounts[0]).not.toHaveProperty('subaccounts');
 	});
 });
 

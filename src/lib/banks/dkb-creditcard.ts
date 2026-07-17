@@ -1,4 +1,4 @@
-import { findHeaderRow, missingRequiredColumns, parseDelimitedCsv } from './csv';
+import { findHeaderRow, missingRequiredColumns, parseDelimitedCsv, splitLines } from './csv';
 import {
 	makeParseError,
 	normalizeWhitespace,
@@ -29,13 +29,19 @@ export const dkbCreditcardAdapter: BankAdapter = {
 				adapterId: 'dkb_creditcard',
 				rows: [],
 				errors: [
-					makeParseError(1, 'missing_header', 'Could not find DKB credit card Belegdatum header row')
+					makeParseError(
+						1,
+						'missing_header',
+						'Could not find DKB credit card Belegdatum header row'
+					)
 				],
 				skippedRows: 0
 			};
 		}
 
 		const parsed = parseDelimitedCsv(csv, { delimiter: ';', headerRowIndex });
+		const metadata = parseDkbMetadata(csv, headerRowIndex);
+		const sourceAccountKey = metadata.Kreditkarte?.trim() || undefined;
 		const missingColumns = missingRequiredColumns(parsed.headers, requiredColumns);
 		if (missingColumns.length > 0) {
 			return {
@@ -48,7 +54,8 @@ export const dkbCreditcardAdapter: BankAdapter = {
 						`Missing required columns: ${missingColumns.join(', ')}`
 					)
 				],
-				skippedRows: parsed.records.length
+				skippedRows: parsed.records.length,
+				metadata
 			};
 		}
 
@@ -109,7 +116,9 @@ export const dkbCreditcardAdapter: BankAdapter = {
 				source: {
 					bankId: 'dkb_creditcard',
 					rowNumber: record.rowNumber,
-					rawType
+					rawType,
+					sourceAccountKey,
+					sourceAccountLabel: sourceAccountKey ? 'Kreditkarte' : undefined
 				}
 			});
 		}
@@ -118,14 +127,27 @@ export const dkbCreditcardAdapter: BankAdapter = {
 			adapterId: 'dkb_creditcard',
 			rows,
 			errors,
-			skippedRows: parsed.records.length - rows.length
+			skippedRows: parsed.records.length - rows.length,
+			metadata
 		};
 	}
 };
 
-function parseForeignAmount(value: string | undefined):
-	| { amountCents: number; currency: string | undefined }
-	| undefined {
+function parseDkbMetadata(csv: string, headerRowIndex: number): Record<string, string> {
+	const metadata: Record<string, string> = {};
+	for (const line of splitLines(csv).slice(0, headerRowIndex)) {
+		const [key, value] = line
+			.replace(/^"|"$/g, '')
+			.split('";"')
+			.map((part) => part.trim());
+		if (key && value) metadata[key.replace(/:$/, '')] = value;
+	}
+	return metadata;
+}
+
+function parseForeignAmount(
+	value: string | undefined
+): { amountCents: number; currency: string | undefined } | undefined {
 	const trimmed = value?.trim();
 	if (!trimmed) return undefined;
 

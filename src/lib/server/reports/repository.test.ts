@@ -7,7 +7,7 @@ import {
 import { createAccount } from '../accounts/repository';
 import { createCategoryRule } from '../categories/repository';
 import type { DbClient } from '../db-client';
-import { confirmImport } from '../imports/confirm';
+import { importIntoExistingAccount } from '../imports/test-support';
 import { sha256Hex } from '../imports/shared';
 import { getAccountBalanceHistory, getNetWorthReport, getSummaryReport } from './repository';
 
@@ -124,22 +124,22 @@ describe('reports repository', () => {
 			},
 			{
 				date: '2026-07-25',
-				assetsCents: 450000,
+				assetsCents: 258366,
 				liabilitiesCents: 50000,
-				netWorthCents: 400000
+				netWorthCents: 208366
 			},
 			{
 				date: '2026-07-31',
-				assetsCents: 450000,
+				assetsCents: 258366,
 				liabilitiesCents: 50000,
-				netWorthCents: 400000
+				netWorthCents: 208366
 			}
 		]);
 	});
 
 	it('falls back to balance-after transactions and transaction deltas for net worth points', async () => {
-		const account = await createAccount(db, { name: 'N26 Main', openingBalanceCents: 100000 });
-		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
+		const account = await createAccount(db, { name: 'N26 Main' });
+		await addManualSnapshot(account.id, '2026-07-01', 100000);
 		await db
 			.prepare(
 				`INSERT INTO transactions (
@@ -190,10 +190,10 @@ describe('reports repository', () => {
 	});
 
 	it('filters net worth to a single account', async () => {
-		const accountA = await createAccount(db, { name: 'Checking', openingBalanceCents: 100000 });
-		const profileA = { ...accountA, accountId: accountA.id, bankId: 'n26' as const };
-		const accountB = await createAccount(db, { name: 'Savings', openingBalanceCents: 500000 });
-		const profileB = { ...accountB, accountId: accountB.id, bankId: 'dkb_girocard' as const };
+		const accountA = await createAccount(db, { name: 'Checking' });
+		await addManualSnapshot(accountA.id, '2026-07-01', 100000);
+		const accountB = await createAccount(db, { name: 'Savings' });
+		await addManualSnapshot(accountB.id, '2026-07-01', 500000);
 		await db
 			.prepare(
 				`INSERT INTO transactions (
@@ -246,7 +246,12 @@ describe('reports repository', () => {
 		);
 
 		expect(netWorth.accounts).toEqual([
-			{ accountId: accountA.id, accountName: 'Checking', balanceCents: 90000 }
+			{
+				accountId: accountA.id,
+				accountName: 'Checking',
+				balanceCents: 90000,
+				balanceInitialized: true
+			}
 		]);
 		expect(netWorth.liabilities).toEqual([
 			{
@@ -276,11 +281,8 @@ describe('reports repository', () => {
 
 	it('filters the summary report to a single account', async () => {
 		const accountA = await seedReportData();
-		const accountB = await createAccount(db, {
-			name: 'Trade Republic',
-			openingBalanceCents: 50000
-		});
-		const profileB = { ...accountB, accountId: accountB.id, bankId: 'trade_republic' as const };
+		const accountB = await createAccount(db, { name: 'Trade Republic' });
+		await addManualSnapshot(accountB.id, '2026-07-01', 50000);
 		await db
 			.prepare(
 				`INSERT INTO transactions (
@@ -318,14 +320,16 @@ describe('reports repository', () => {
 	});
 
 	it('builds a balance history for a single account', async () => {
-		const account = await createAccount(db, { name: 'N26 Main', openingBalanceCents: 100000 });
-		const importAccount = { ...account, accountId: account.id, bankId: 'n26' as const };
+		const account = await createAccount(db, { name: 'N26 Main' });
+		await addManualSnapshot(account.id, '2026-07-01', 100000);
+		await addManualSnapshot(account.id, '2026-08-10', 120000);
 		await db
 			.prepare(
 				`INSERT INTO transactions (
 					id, account_id, dedupe_key, booking_date, amount_cents, currency,
 					balance_after_cents, search_text, classification_status
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?),
+					(?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 			)
 			.bind(
 				'tx-balance-after',
@@ -354,6 +358,15 @@ describe('reports repository', () => {
 				'EUR',
 				null,
 				'income',
+				'unknown',
+				'tx-future',
+				account.id,
+				'key-future',
+				'2026-08-05',
+				15000,
+				'EUR',
+				null,
+				'future',
 				'unknown'
 			)
 			.run();
@@ -376,7 +389,7 @@ describe('reports repository', () => {
 });
 
 async function seedReportData() {
-	const account = await createAccount(db, { name: 'DKB Giro', openingBalanceCents: 10000 });
+	const account = await createAccount(db, { name: 'DKB Giro' });
 	const importAccount = { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
 	await createCategoryRule(db, {
 		categoryId: 'cat-groceries',
@@ -400,14 +413,25 @@ async function seedReportData() {
 		'"25.07.26";"25.07.26";"Gebucht";"Employer";"Me";"Salary";"Eingang";"DE";"2500,00";"";"";"ref-salary"'
 	]);
 
-	await confirmImport(db, {
+	await importIntoExistingAccount(db, {
 		accountId: importAccount.accountId,
 		adapterId: importAccount.bankId,
 		csv,
+		reportedBalanceCents: 258366,
 		expectedHash: await sha256Hex(csv)
 	});
 
 	return account;
+}
+
+async function addManualSnapshot(accountId: string, date: string, balanceCents: number) {
+	await db
+		.prepare(
+			`INSERT INTO account_balance_snapshots (id, account_id, snapshot_date, balance_cents, source)
+			VALUES (?, ?, ?, ?, 'manual')`
+		)
+		.bind(crypto.randomUUID(), accountId, date, balanceCents)
+		.run();
 }
 
 function dkbCsv(rows: string[]): string {

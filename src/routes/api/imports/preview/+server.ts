@@ -2,13 +2,14 @@ import { json } from '@sveltejs/kit';
 import { jsonError, getRequestDatabase } from '$lib/server/api';
 import { ValidationError } from '$lib/server/accounts/errors';
 import { previewImport } from '$lib/server/imports/preview';
+import { parseImportAccountAssignmentsJson } from '$lib/server/imports/validation';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async (event) => {
 	try {
 		const form = await readFormData(event.request);
-		const accountId = getFormString(form, 'accountId');
 		const adapterId = getFormString(form, 'adapterId');
+		const assignments = getOptionalAssignments(form);
 		const file = form.get('file');
 
 		if (!(file instanceof Blob)) {
@@ -16,8 +17,8 @@ export const POST: RequestHandler = async (event) => {
 		}
 
 		const preview = await previewImport(getRequestDatabase(event), {
-			accountId,
 			adapterId,
+			assignments,
 			csv: await file.text()
 		});
 
@@ -42,4 +43,11 @@ function getFormString(form: FormData, field: string): string {
 	}
 
 	return value;
+}
+
+function getOptionalAssignments(form: FormData) {
+	const value = form.get('assignments');
+	if (value === null) return undefined;
+	if (typeof value !== 'string') throw new ValidationError('assignments must be JSON');
+	return parseImportAccountAssignmentsJson(value);
 }

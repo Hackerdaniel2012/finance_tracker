@@ -5,12 +5,10 @@ export interface ReportDateRange {
 
 export interface SummaryReportOptions {
 	accountId?: string;
-	subaccount?: string;
 }
 
 export interface NetWorthReportOptions {
 	accountId?: string;
-	subaccount?: string;
 }
 
 export interface AccountBalanceHistoryReport {
@@ -50,7 +48,8 @@ export interface SummaryReport {
 	byAccount: Array<{
 		accountId: string;
 		accountName: string;
-		balanceCents: number;
+		balanceCents: number | null;
+		balanceInitialized: boolean;
 		incomeCents: number;
 		expenseCents: number;
 		netCents: number;
@@ -76,7 +75,8 @@ export interface NetWorthReport {
 	accounts: Array<{
 		accountId: string;
 		accountName: string;
-		balanceCents: number;
+		balanceCents: number | null;
+		balanceInitialized: boolean;
 	}>;
 	liabilities: Array<{
 		id: string;

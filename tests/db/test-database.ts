@@ -52,7 +52,9 @@ export async function applyMigrations(db: Database, through?: string): Promise<v
 		'0021_add_shopping_category.sql',
 		'0022_add_plan_match_ledger.sql',
 		'0023_repair_plan_migration_duplicates.sql',
-		'0024_add_liability_balance_baselines.sql'
+		'0024_add_liability_balance_baselines.sql',
+		'0025_unify_account_balance_source.sql',
+		'0026_multi_account_import_runs.sql'
 	];
 	for (const file of migrationFiles) {
 		applySql(db, await readFile(resolve('migrations', file), 'utf8'));

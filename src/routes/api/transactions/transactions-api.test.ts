@@ -7,7 +7,7 @@ import {
 import { createAccount } from '$lib/server/accounts/repository';
 import { createCategoryRule } from '$lib/server/categories/repository';
 import type { DbClient } from '$lib/server/db-client';
-import { confirmImport } from '$lib/server/imports/confirm';
+import { importIntoExistingAccount } from '$lib/server/imports/test-support';
 import { sha256Hex } from '$lib/server/imports/shared';
 import { GET } from './+server';
 
@@ -59,35 +59,18 @@ describe('/api/transactions', () => {
 		});
 	});
 
-	it('filters transactions by account and subaccount', async () => {
+	it('filters transactions by real account', async () => {
 		const account = await seedN26Transactions();
 
 		const allResponse = await GET(
 			event(`http://localhost/api/transactions?accountId=${account.id}`)
 		);
 		await expect(allResponse.json()).resolves.toMatchObject({
-			pagination: { total: 3 }
-		});
-
-		const mainResponse = await GET(
-			event(`http://localhost/api/transactions?accountId=${account.id}&subaccount=Hauptkonto`)
-		);
-		await expect(mainResponse.json()).resolves.toMatchObject({
 			pagination: { total: 2 },
 			transactions: [
 				{ payee: 'Cafe', amountCents: -400 },
 				{ payee: 'Shop', amountCents: -1234 }
 			]
-		});
-
-		const savingsResponse = await GET(
-			event(
-				`http://localhost/api/transactions?accountId=${account.id}&subaccount=${encodeURIComponent('20k in 2023')}`
-			)
-		);
-		await expect(savingsResponse.json()).resolves.toMatchObject({
-			pagination: { total: 1 },
-			transactions: [{ payee: 'Employer', amountCents: 250000 }]
 		});
 	});
 
@@ -110,10 +93,11 @@ async function seedN26Transactions() {
 		'2026-07-10,,Employer,DE,"Credit Transfer",Salary,"20k in 2023",2500.00,,,'
 	]);
 
-	await confirmImport(db, {
+	await importIntoExistingAccount(db, {
 		accountId: importAccount.accountId,
 		adapterId: importAccount.bankId,
 		csv,
+		reportedBalanceCents: 0,
 		expectedHash: await sha256Hex(csv)
 	});
 
@@ -151,10 +135,11 @@ async function seedTransactions() {
 		'"10.07.26";"10.07.26";"Gebucht";"Employer";"Me";"Salary";"Eingang";"DE";"2500,00";"";"";"ref-salary"'
 	]);
 
-	await confirmImport(db, {
+	await importIntoExistingAccount(db, {
 		accountId: importAccount.accountId,
 		adapterId: importAccount.bankId,
 		csv,
+		reportedBalanceCents: 0,
 		expectedHash: await sha256Hex(csv)
 	});
 }

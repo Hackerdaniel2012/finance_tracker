@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
 	applyMigrations,
@@ -7,11 +5,13 @@ import {
 	createTestDbClient,
 	firstValue
 } from '../../../../tests/db/test-database';
+import type { DbClient } from '../db-client';
+import { listCalculatedAccountBalances } from '../accounts/balance';
 import { createAccount } from '../accounts/repository';
-import { createCategoryRule } from '../categories/repository';
-import type { DbClient, DbRunResult, DbStatement, DbValue } from '../db-client';
+import { createPlan } from '../plans/repository';
 import { confirmImport } from './confirm';
-import { sha256Hex } from './shared';
+import { previewImport } from './preview';
+import { n26Csv } from './preview.test';
 
 let db: DbClient;
 let sqlite: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -23,324 +23,273 @@ beforeEach(async () => {
 });
 
 describe('confirmImport', () => {
-	it('inserts parsed transactions, applies rules, and flags unknown rows', async () => {
-		const importAccount = await createDkbAccount();
-		await createCategoryRule(db, {
-			categoryId: 'cat-groceries',
-			name: 'Shop payee',
-			field: 'payee',
-			operator: 'contains',
-			pattern: 'Shop',
-			priority: 10
-		});
-		const csv = dkbCsv([
-			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"',
-			'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"'
-		]);
+	it('atomically creates accounts, mappings, batches and grouped transactions', async () => {
+		const csv = n26Csv();
+		const discovery = await previewImport(db, { adapterId: 'n26', csv });
+		const assignments = [
+			{
+				sourceAccountKey: 'Main',
+				newAccount: { name: 'N26 Main', institution: 'N26' },
+				balanceMode: 'complete_history' as const
+			},
+			{
+				sourceAccountKey: 'Savings',
+				newAccount: { name: 'N26 Savings', institution: 'N26' },
+				balanceMode: 'reported' as const,
+				reportedBalanceCents: 10000
+			}
+		];
+		const checked = await previewImport(db, { adapterId: 'n26', csv, assignments });
+		expect(checked.readyToConfirm).toBe(true);
+		expect(checked.accounts[0].calculatedBalanceCents).toBe(98000);
 
 		const report = await confirmImport(db, {
-			accountId: importAccount.accountId,
-			adapterId: importAccount.bankId,
+			adapterId: 'n26',
 			csv,
-			expectedHash: await sha256Hex(csv)
+			expectedHash: discovery.fileHash,
+			expectedConfigurationHash: checked.configurationHash!,
+			assignments
 		});
-
-		expect(report).toMatchObject({
-			accountId: importAccount.accountId,
-			adapterId: 'dkb_girocard',
-			startDate: '2026-07-08',
-			endDate: '2026-07-09',
-			rowCount: 2,
-			importedCount: 2,
-			duplicateCount: 0,
-			errorCount: 0,
-			unknownCount: 1
-		});
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches')).toBe(1);
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(2);
-		expect(
-			firstValue<string>(
-				sqlite,
-				"SELECT category_id FROM transactions WHERE dedupe_key = 'dkb_ref:ref-shop|2026-07-08|2026-07-08|-1234'"
-			)
-		).toBe('cat-groceries');
-		expect(
-			firstValue<string>(
-				sqlite,
-				"SELECT classification_status FROM transactions WHERE dedupe_key = 'dkb_ref:ref-cafe|2026-07-09|2026-07-09|-400'"
-			)
-		).toBe('unknown');
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transaction_review_flags')).toBe(1);
-	});
-
-	it('deduplicates existing rows and stores parse errors without raw CSV rows', async () => {
-		const importAccount = await createDkbAccount();
-		await insertTransaction(
-			importAccount.accountId,
-			'dkb_ref:ref-duplicate|2026-07-08|2026-07-08|-1234'
+		expect(report.accounts).toHaveLength(2);
+		expect(report.importedCount).toBe(3);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_runs')).toBe(1);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches')).toBe(2);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM accounts')).toBe(2);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_account_mappings')).toBe(2);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(DISTINCT account_id) FROM transactions')).toBe(
+			2
 		);
-		const csv = dkbCsv([
-			'"08.07.26";"08.07.26";"Gebucht";"Me";"Duplicate";"Already imported";"Ausgang";"DE";"12,34";"";"";"ref-duplicate"',
-			'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-new"',
-			'"10.07.26";"10.07.26";"Gebucht";"Me";"Bad";"Broken";"Ausgang";"DE";"not-money";"";"";"ref-bad"'
-		]);
-
-		const report = await confirmImport(db, {
-			accountId: importAccount.accountId,
-			adapterId: importAccount.bankId,
-			csv,
-			expectedHash: await sha256Hex(csv)
-		});
-
-		expect(report).toMatchObject({
-			rowCount: 2,
-			importedCount: 1,
-			duplicateCount: 1,
-			errorCount: 1,
-			unknownCount: 1
-		});
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(2);
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_row_errors')).toBe(1);
-		expect(
-			firstValue<number>(
-				sqlite,
-				"SELECT COUNT(*) FROM pragma_table_info('import_row_errors') WHERE name LIKE '%raw%'"
-			)
-		).toBe(0);
-		expect(
-			firstValue<number>(
-				sqlite,
-				"SELECT duplicate_count FROM import_batches WHERE id = '" + report.batchId + "'"
-			)
-		).toBe(1);
 	});
 
-	it('rolls back the confirmed import when a later write fails', async () => {
-		const importAccount = await createDkbAccount();
-		const csv = dkbCsv([
-			'"08.07.26";"08.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"'
-		]);
-		const failingDb = createFailingBatchClient(db, 'INSERT INTO transaction_review_flags');
+	it('rejects a changed file and a repeated run', async () => {
+		const csv = n26Csv();
+		const preview = await previewImport(db, { adapterId: 'n26', csv });
+		const assignments = preview.accounts.map((group) => ({
+			sourceAccountKey: group.sourceAccountKey,
+			newAccount: { name: group.sourceAccountLabel, institution: 'N26' },
+			balanceMode: 'complete_history' as const
+		}));
+		const checked = await previewImport(db, { adapterId: 'n26', csv, assignments });
+		await expect(
+			confirmImport(db, {
+				adapterId: 'n26',
+				csv: `${csv}\n`,
+				expectedHash: preview.fileHash,
+				expectedConfigurationHash: checked.configurationHash!,
+				assignments
+			})
+		).rejects.toThrow('File hash');
+		await confirmImport(db, {
+			adapterId: 'n26',
+			csv,
+			expectedHash: preview.fileHash,
+			expectedConfigurationHash: checked.configurationHash!,
+			assignments
+		});
+		await expect(
+			confirmImport(db, {
+				adapterId: 'n26',
+				csv,
+				expectedHash: preview.fileHash,
+				expectedConfigurationHash: checked.configurationHash!,
+				assignments
+			})
+		).rejects.toThrow('already exists');
+	});
+
+	it('maps a concurrent duplicate file insertion to a conflict without partial writes', async () => {
+		const csv = n26Csv().split('\n').slice(0, 2).join('\n');
+		const discovery = await previewImport(db, { adapterId: 'n26', csv });
+		const assignments = [
+			{
+				sourceAccountKey: discovery.accounts[0]!.sourceAccountKey,
+				newAccount: { name: 'Concurrent account', institution: 'N26' },
+				balanceMode: 'complete_history' as const
+			}
+		];
+		const checked = await previewImport(db, { adapterId: 'n26', csv, assignments });
+		let insertedCompetingRun = false;
+		const racingDb: DbClient = {
+			prepare(statement) {
+				return db.prepare(statement);
+			},
+			async batch(statements) {
+				if (!insertedCompetingRun) {
+					insertedCompetingRun = true;
+					await db
+						.prepare(
+							`INSERT INTO import_runs (id, file_hash, adapter_id)
+							VALUES ('competing-run', ?, 'n26')`
+						)
+						.bind(discovery.fileHash)
+						.run();
+					await db
+						.prepare(
+							`INSERT INTO import_file_claims (adapter_id, file_hash, import_run_id)
+							VALUES ('n26', ?, 'competing-run')`
+						)
+						.bind(discovery.fileHash)
+						.run();
+				}
+				return db.batch!(statements);
+			}
+		};
 
 		await expect(
-			confirmImport(failingDb, {
-				accountId: importAccount.accountId,
-				adapterId: importAccount.bankId,
+			confirmImport(racingDb, {
+				adapterId: 'n26',
 				csv,
-				expectedHash: await sha256Hex(csv)
+				expectedHash: discovery.fileHash,
+				expectedConfigurationHash: checked.configurationHash!,
+				assignments
 			})
-		).rejects.toThrow('forced batch failure');
-
+		).rejects.toThrow('Import run already exists for this file');
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_runs')).toBe(1);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_file_claims')).toBe(1);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM accounts')).toBe(0);
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches')).toBe(0);
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(0);
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transaction_review_flags')).toBe(0);
 	});
 
-	it('imports repeated N26 rows with identical visible fields', async () => {
-		const importAccount = await createN26Account();
-		const csv = n26Csv([
-			'2026-07-08,2026-07-08,N26,,Fee,"ATM Withdrawal Fee",Main,-2.00,,,',
-			'2026-07-08,2026-07-08,N26,,Fee,"ATM Withdrawal Fee",Main,-2.00,,,'
-		]);
-
-		const report = await confirmImport(db, {
-			accountId: importAccount.accountId,
-			adapterId: importAccount.bankId,
-			csv,
-			expectedHash: await sha256Hex(csv)
-		});
-
-		expect(report).toMatchObject({
-			rowCount: 2,
-			importedCount: 2,
-			duplicateCount: 0,
-			errorCount: 0
-		});
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(2);
-		expect(firstValue<number>(sqlite, 'SELECT SUM(amount_cents) FROM transactions')).toBe(-400);
-	});
-
-	it('persists N26 Account Name as subaccount', async () => {
-		const importAccount = await createN26Account();
-		const csv = n26Csv([
-			'2026-07-08,,Shop,DE,"Debit Transfer",Groceries,"Hauptkonto",-12.34,,,',
-			'2026-07-09,,Employer,DE,"Credit Transfer",Salary,"20k in 2023",2500.00,,,'
-		]);
-
-		await confirmImport(db, {
-			accountId: importAccount.accountId,
-			adapterId: importAccount.bankId,
-			csv,
-			expectedHash: await sha256Hex(csv)
-		});
-
-		const row = await db
+	it('rolls back the common run when a child batch conflicts', async () => {
+		const csv = n26Csv().split('\n').slice(0, 3).join('\n');
+		const preview = await previewImport(db, { adapterId: 'n26', csv });
+		const accountId = 'existing';
+		await db
+			.prepare("INSERT INTO accounts (id, name) VALUES (?, 'Existing')")
+			.bind(accountId)
+			.run();
+		await db
 			.prepare(
-				'SELECT GROUP_CONCAT(DISTINCT subaccount) AS subaccounts FROM transactions WHERE account_id = ?'
+				"INSERT INTO import_batches (id, account_id, file_hash, adapter_id) VALUES ('legacy', ?, ?, 'n26')"
 			)
-			.bind(importAccount.accountId)
-			.first<{ subaccounts: string }>();
-		expect(row?.subaccounts?.split(',').sort()).toEqual(['20k in 2023', 'Hauptkonto']);
+			.bind(accountId, preview.fileHash)
+			.run();
+		const assignments = [
+			{
+				sourceAccountKey: 'Main',
+				targetAccountId: accountId,
+				balanceMode: 'reported' as const,
+				reportedBalanceCents: 0
+			}
+		];
+		const checked = await previewImport(db, { adapterId: 'n26', csv, assignments });
+		await expect(
+			confirmImport(db, {
+				adapterId: 'n26',
+				csv,
+				expectedHash: preview.fileHash,
+				expectedConfigurationHash: checked.configurationHash!,
+				assignments
+			})
+		).rejects.toThrow();
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_runs')).toBe(0);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_account_mappings')).toBe(0);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(0);
 	});
 
-	it('imports the latest N26 fixture to the expected computed balance', async () => {
-		const importAccount = await createN26Account();
-		const csv = await readFile(resolve('tests/fixtures/n26-basic.csv'), 'utf8');
+	it('anchors complete history at the CSV end without including future transactions', async () => {
+		const account = await createAccount(db, { name: 'Existing account' });
+		await db
+			.prepare(
+				`INSERT INTO import_runs (id, file_hash, adapter_id)
+				VALUES ('older-run', 'older-file', 'n26')`
+			)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO import_batches (
+					id, account_id, file_hash, adapter_id, import_run_id, start_date, end_date
+				) VALUES ('older-batch', ?, 'older-file', 'n26', 'older-run', '2026-07-01', '2026-07-05')`
+			)
+			.bind(account.id)
+			.run();
+		await db
+			.prepare(
+				`INSERT INTO transactions (
+					id, account_id, import_batch_id, dedupe_key, booking_date, amount_cents, search_text
+				) VALUES
+					('past', ?, 'older-batch', 'past', '2026-07-01', 1000, 'past'),
+					('same-day', ?, 'older-batch', 'same-day', '2026-07-05', 300, 'same-day'),
+					('future', ?, NULL, 'future', '2026-07-10', 500, 'future')`
+			)
+			.bind(account.id, account.id, account.id)
+			.run();
+		const csv = [
+			'"Booking Date","Value Date","Partner Name","Partner Iban","Type","Payment Reference","Account Name","Amount (EUR)","Original Amount","Original Currency","Exchange Rate"',
+			'2026-07-05,2026-07-05,Shop,,Debit Transfer,Food,Main,-2.00,,,'
+		].join('\n');
+		const discovery = await previewImport(db, { adapterId: 'n26', csv });
+		const assignments = [
+			{
+				sourceAccountKey: discovery.accounts[0]!.sourceAccountKey,
+				targetAccountId: account.id,
+				balanceMode: 'complete_history' as const
+			}
+		];
+		const checked = await previewImport(db, { adapterId: 'n26', csv, assignments });
+		expect(checked.accounts[0]!.calculatedBalanceCents).toBe(1100);
+
+		await confirmImport(db, {
+			adapterId: 'n26',
+			csv,
+			expectedHash: discovery.fileHash,
+			expectedConfigurationHash: checked.configurationHash!,
+			assignments
+		});
+		expect(
+			(await listCalculatedAccountBalances(db, '2026-07-05', account.id))[0]?.balanceCents
+		).toBe(1100);
+		expect(
+			(await listCalculatedAccountBalances(db, '2026-07-20', account.id))[0]?.balanceCents
+		).toBe(1600);
+	});
+
+	it('reports unknown counts from the final state after plan matching', async () => {
+		const account = await createAccount(db, { name: 'Plan account' });
+		await createPlan(db, {
+			accountId: account.id,
+			categoryId: 'cat-shopping',
+			counterparty: 'Plan Merchant',
+			direction: 'expense',
+			cadence: 'once',
+			amountCents: 1234,
+			nextDate: '2026-07-05'
+		});
+		const csv = [
+			'"Booking Date","Value Date","Partner Name","Partner Iban","Type","Payment Reference","Account Name","Amount (EUR)","Original Amount","Original Currency","Exchange Rate"',
+			'2026-07-05,2026-07-05,Plan Merchant,,Debit Transfer,Planned purchase,Main,-12.34,,,',
+			'2026-07-05,2026-07-05,Other Merchant,,Debit Transfer,Unplanned purchase,Main,-5.00,,,'
+		].join('\n');
+		const discovery = await previewImport(db, { adapterId: 'n26', csv });
+		const assignments = [
+			{
+				sourceAccountKey: 'Main',
+				targetAccountId: account.id,
+				balanceMode: 'complete_history' as const
+			}
+		];
+		const checked = await previewImport(db, { adapterId: 'n26', csv, assignments });
 
 		const report = await confirmImport(db, {
-			accountId: importAccount.accountId,
-			adapterId: importAccount.bankId,
+			adapterId: 'n26',
 			csv,
-			expectedHash: await sha256Hex(csv)
+			expectedHash: discovery.fileHash,
+			expectedConfigurationHash: checked.configurationHash!,
+			assignments
 		});
 
-		expect(report).toMatchObject({
-			rowCount: 4,
-			importedCount: 4,
-			duplicateCount: 0,
-			errorCount: 0,
-			unknownCount: 4
-		});
-		expect(firstValue<number>(sqlite, 'SELECT SUM(amount_cents) FROM transactions')).toBe(243350);
-	});
-
-	it('rejects hash mismatches, missing profiles, and repeated file imports', async () => {
-		const importAccount = await createDkbAccount();
-		const csv = dkbCsv([
-			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"'
-		]);
-		const expectedHash = await sha256Hex(csv);
-
-		await expect(
-			confirmImport(db, {
-				accountId: importAccount.accountId,
-				adapterId: importAccount.bankId,
-				csv,
-				expectedHash: 'bad'
-			})
-		).rejects.toThrow('File hash does not match preview');
-		await expect(
-			confirmImport(db, { accountId: 'missing', adapterId: 'dkb_girocard', csv, expectedHash })
-		).rejects.toThrow('Account not found');
-
-		await confirmImport(db, {
-			accountId: importAccount.accountId,
-			adapterId: importAccount.bankId,
-			csv,
-			expectedHash
-		});
-		await expect(
-			confirmImport(db, {
-				accountId: importAccount.accountId,
-				adapterId: importAccount.bankId,
-				csv,
-				expectedHash
-			})
-		).rejects.toThrow('Import batch already exists for this account and file');
-	});
-
-	it('creates conservative recurring suggestions after confirmed imports', async () => {
-		const importAccount = await createDkbAccount();
-		await createCategoryRule(db, {
-			categoryId: 'cat-utilities',
-			name: 'Power Co payee',
-			field: 'payee',
-			operator: 'contains',
-			pattern: 'Power Co',
-			priority: 10
-		});
-		const csv = dkbCsv([
-			'"14.04.26";"14.04.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"46,00";"";"";"ref-power-apr"',
-			'"15.05.26";"15.05.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"46,00";"";"";"ref-power-may"',
-			'"14.06.26";"14.06.26";"Gebucht";"Me";"Power Co";"Electricity";"Ausgang";"DE";"46,00";"";"";"ref-power-jun"'
-		]);
-
-		await confirmImport(db, {
-			accountId: importAccount.accountId,
-			adapterId: importAccount.bankId,
-			csv,
-			expectedHash: await sha256Hex(csv)
-		});
-
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM recurring_groups')).toBe(1);
+		expect(report.unknownCount).toBe(1);
+		expect(report.accounts[0]?.unknownCount).toBe(1);
 		expect(
-			firstValue<string>(
-				sqlite,
-				"SELECT status || ':' || cadence || ':' || next_date FROM recurring_groups"
-			)
-		).toBe('suggested:monthly:2026-07-14');
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM recurring_group_transactions')).toBe(3);
+			sqlite.exec(
+				`SELECT payee, classification_status
+				FROM transactions
+				ORDER BY amount_cents`
+			)[0]?.values
+		).toEqual([
+			['Plan Merchant', 'auto'],
+			['Other Merchant', 'unknown']
+		]);
 	});
 });
-
-async function createDkbAccount() {
-	const account = await createAccount(db, { name: 'DKB Giro' });
-	return { ...account, accountId: account.id, bankId: 'dkb_girocard' as const };
-}
-
-async function createN26Account() {
-	const account = await createAccount(db, { name: 'N26 Main' });
-	return { ...account, accountId: account.id, bankId: 'n26' as const };
-}
-
-async function insertTransaction(accountId: string, dedupeKey: string) {
-	await db
-		.prepare(
-			`INSERT INTO transactions (
-				id, account_id, dedupe_key, booking_date, amount_cents, search_text
-			) VALUES (?, ?, ?, ?, ?, ?)`
-		)
-		.bind(crypto.randomUUID(), accountId, dedupeKey, '2026-07-08', -1234, 'duplicate')
-		.run();
-}
-
-function dkbCsv(rows: string[]): string {
-	return [
-		'"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"',
-		...rows
-	].join('\n');
-}
-
-function n26Csv(rows: string[]): string {
-	return [
-		'"Booking Date","Value Date","Partner Name","Partner Iban",Type,"Payment Reference","Account Name","Amount (EUR)","Original Amount","Original Currency","Exchange Rate"',
-		...rows
-	].join('\n');
-}
-
-function createFailingBatchClient(db: DbClient, failingSql: string): DbClient {
-	return {
-		prepare(sql) {
-			const statement = db.prepare(sql);
-			return sql.includes(failingSql) ? new FailingStatement(statement) : statement;
-		},
-		batch(statements) {
-			if (!db.batch) {
-				throw new Error('Test database does not support batch');
-			}
-
-			return db.batch(statements);
-		}
-	};
-}
-
-class FailingStatement implements DbStatement {
-	constructor(private readonly statement: DbStatement) {}
-
-	bind(...values: DbValue[]): DbStatement {
-		this.statement.bind(...values);
-		return this;
-	}
-
-	all<T extends Record<string, DbValue>>() {
-		return this.statement.all<T>();
-	}
-
-	first<T extends Record<string, DbValue>>() {
-		return this.statement.first<T>();
-	}
-
-	async run(): Promise<DbRunResult> {
-		throw new Error('forced batch failure');
-	}
-}

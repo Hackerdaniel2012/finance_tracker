@@ -107,7 +107,7 @@
 
 <div class="relative min-w-0" bind:this={container}>
 	<button
-		class="flex h-11 w-full min-w-0 items-center justify-between gap-3 rounded-ui border border-zinc-300 bg-white px-5 text-left text-base font-semibold text-zinc-950 shadow-[inset_0_0_0_1px_rgb(212_212_216_/_0.2)] disabled:cursor-not-allowed disabled:opacity-50"
+		class="flex h-11 w-full min-w-0 items-center justify-between gap-3 rounded-ui border border-zinc-300 bg-white px-5 text-left text-base font-semibold text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50"
 		type="button"
 		aria-label={ariaLabel}
 		aria-haspopup="dialog"
@@ -129,7 +129,7 @@
 
 	{#if open}
 		<div
-			class="absolute left-0 z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-ui border border-zinc-200 bg-white p-4 shadow-xl"
+			class="absolute left-0 z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-ui border border-zinc-200 bg-white p-4"
 			role="dialog"
 			aria-label={ariaLabel}
 		>

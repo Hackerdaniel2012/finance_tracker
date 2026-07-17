@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { occurrenceDate } from './cadence';
+import { occurrenceDate, previousOccurrenceDate } from './cadence';
 
 describe('plan cadence', () => {
 	it('keeps a month-end anchor across short and long months', () => {
@@ -15,5 +15,11 @@ describe('plan cadence', () => {
 	it('advances daily and weekly occurrences by their exact interval', () => {
 		expect(occurrenceDate('2026-07-01', 'daily', 6)).toBe('2026-07-07');
 		expect(occurrenceDate('2026-07-01', 'weekly', 2)).toBe('2026-07-15');
+	});
+
+	it('moves backwards without losing a month-end anchor', () => {
+		expect(previousOccurrenceDate('2026-08-31', 'monthly', 1)).toBe('2026-07-31');
+		expect(previousOccurrenceDate('2026-08-31', 'monthly', 2)).toBe('2026-06-30');
+		expect(previousOccurrenceDate('2026-08-31', 'monthly', 3)).toBe('2026-05-31');
 	});
 });

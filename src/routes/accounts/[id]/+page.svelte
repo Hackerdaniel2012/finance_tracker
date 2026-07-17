@@ -4,6 +4,8 @@
 	import { BarChart, LineChart } from 'layerchart/svg';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
+	import Skeleton from '$lib/components/Skeleton.svelte';
 	import type { PageData } from './$types';
 
 	interface RecentTransaction {
@@ -30,13 +32,10 @@
 
 	let recentTransactions = $state<RecentTransaction[]>([]);
 	let recentError = $state<string | null>(null);
+	let isRecentTransactionsLoading = $state(true);
 	let categoryView = $state<'expense' | 'income'>('expense');
 
-	const balanceCents = $derived(
-		data.summary.byAccount[0]?.balanceCents ??
-			data.account.currentBalanceCents ??
-			data.account.openingBalanceCents
-	);
+	const balanceCents = $derived(data.summary.byAccount[0]?.balanceCents ?? null);
 	const historyPoints = $derived(
 		data.history.points.map((point: { date: string; balanceCents: number }) => ({
 			date: new Date(`${point.date}T00:00:00.000Z`),
@@ -66,6 +65,7 @@
 	});
 
 	async function loadRecentTransactions(accountId: string) {
+		isRecentTransactionsLoading = true;
 		recentError = null;
 
 		try {
@@ -74,7 +74,9 @@
 			);
 			recentTransactions = payload.transactions;
 		} catch {
-			recentError = m.transactions_status_error();
+			recentError = m.recent_transactions_load_error();
+		} finally {
+			isRecentTransactionsLoading = false;
 		}
 	}
 
@@ -103,15 +105,8 @@
 	<title>{data.account.name} | {m.account_summary_title()} | {m.app_title()}</title>
 </svelte:head>
 
-<main class="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:py-8">
+<main class="mx-auto grid max-w-[90rem] gap-6 px-6 pb-[50px] pt-6 lg:pt-8">
 	<section class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-		<div>
-			<h1 class="text-3xl font-semibold text-zinc-950">{m.account_summary_title()}</h1>
-			<p class="mt-1 text-zinc-600">
-				{data.account.institution || m.institution()} · {data.summary.range.from} – {data.summary
-					.range.to}
-			</p>
-		</div>
 		<label class="grid gap-1 text-sm font-medium text-zinc-700">
 			<span>{m.select_account()}</span>
 			<select
@@ -127,35 +122,37 @@
 	</section>
 
 	<section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4">
 			<p class="text-sm font-medium text-zinc-500">{m.account_balance()}</p>
-			<p class="mt-2 text-2xl font-semibold text-zinc-950">{centsToEuros(balanceCents)}</p>
+			<p class="mt-2 text-2xl font-semibold text-zinc-950">
+				{balanceCents === null ? m.balance_not_initialized() : centsToEuros(balanceCents)}
+			</p>
 		</article>
-		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4">
 			<p class="text-sm font-medium text-zinc-500">{m.account_income()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">
 				{centsToEuros(data.summary.totals.incomeCents)}
 			</p>
 		</article>
-		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4">
 			<p class="text-sm font-medium text-zinc-500">{m.account_expenses()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">
 				{centsToEuros(data.summary.totals.expenseCents)}
 			</p>
 		</article>
-		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4">
 			<p class="text-sm font-medium text-zinc-500">{m.account_net()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">
 				{centsToEuros(data.summary.totals.netCents)}
 			</p>
 		</article>
-		<article class="rounded-ui border border-zinc-200 bg-white p-4 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-4">
 			<p class="text-sm font-medium text-zinc-500">{m.unknown_transactions()}</p>
 			<p class="mt-2 text-2xl font-semibold text-zinc-950">{data.summary.totals.unknownCount}</p>
 		</article>
 	</section>
 
-	<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+	<section class="rounded-ui border border-zinc-200 bg-white p-5">
 		<div class="flex items-center justify-between gap-4">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.account_balance_history()}</h2>
 			<p class="text-sm text-zinc-500">{data.history.range.from} – {data.history.range.to}</p>
@@ -183,13 +180,30 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-2">
-		<article class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+		<article
+			class="rounded-ui border border-zinc-200 bg-white p-5"
+			aria-busy={isRecentTransactionsLoading}
+		>
 			<h2 class="text-lg font-semibold text-zinc-950">{m.recent_transactions()}</h2>
 			{#if recentError}
-				<p class="mt-4 text-sm text-red-700">{recentError}</p>
+				<ErrorAlert
+					class="mt-4"
+					message={recentError}
+					retry={() => loadRecentTransactions(data.account.id)}
+					retryLabel={m.retry()}
+				/>
 			{:else}
 				<div class="mt-4 divide-y divide-zinc-200">
-					{#if recentTransactions.length === 0}
+					{#if isRecentTransactionsLoading}
+						{#each Array(4) as _}
+							<div class="grid grid-cols-[1fr_auto] gap-3 py-3">
+								<div class="space-y-2">
+									<Skeleton class="h-5 w-40" /><Skeleton class="h-4 w-24" />
+								</div>
+								<Skeleton class="h-5 w-20" />
+							</div>
+						{/each}
+					{:else if recentTransactions.length === 0}
 						<p class="py-4 text-sm text-zinc-500">{m.no_recent_transactions()}</p>
 					{:else}
 						{#each recentTransactions as transaction (transaction.id)}
@@ -208,7 +222,7 @@
 			{/if}
 		</article>
 
-		<article class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+		<article class="rounded-ui border border-zinc-200 bg-white p-5">
 			<div class="flex items-center justify-between gap-3">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.category()}</h2>
 				<div class="flex rounded border border-zinc-300 p-1 text-xs font-medium">

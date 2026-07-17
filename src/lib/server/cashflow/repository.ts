@@ -1,4 +1,5 @@
 import { occurrenceDate } from '$lib/plans/cadence';
+import { listCalculatedAccountBalances } from '../accounts/balance';
 import type { DbClient, DbRow } from '../db-client';
 import type { PlanCadence } from '../plans/types';
 import type {
@@ -16,7 +17,6 @@ export async function getMonthCashflowReport(
 ): Promise<MonthCashflowReport> {
 	const from = `${window.asOf.slice(0, 7)}-01`;
 	const accountClause = window.accountId ? 'AND account_id = ?' : '';
-	const subaccountClause = window.subaccount ? 'AND subaccount = ?' : '';
 	const [actual, payments, income] = await Promise.all([
 		db
 			.prepare(
@@ -25,13 +25,12 @@ export async function getMonthCashflowReport(
 					COALESCE(SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END), 0) expense_cents,
 					COALESCE(SUM(amount_cents), 0) net_cents
 				FROM transactions
-				WHERE booking_date BETWEEN ? AND ? ${accountClause} ${subaccountClause}`
+				WHERE booking_date BETWEEN ? AND ? ${accountClause}`
 			)
 			.bind(
 				from,
 				window.asOf,
-				...(window.accountId ? [window.accountId] : []),
-				...(window.subaccount ? [window.subaccount] : [])
+				...(window.accountId ? [window.accountId] : [])
 			)
 			.first<ActualRow>(),
 		getUpcomingPayments(db, window),
@@ -81,14 +80,14 @@ export async function getBalanceBeforeIncomeProjection(
 ): Promise<BalanceBeforeIncomeProjection> {
 	const [income, balances] = await Promise.all([
 		getUpcomingIncome(db, { ...window, monthEnd: farFuture(window.asOf) }),
-		getAccountBalances(db, window.asOf, window.accountId, window.subaccount)
+		listCalculatedAccountBalances(db, window.asOf, window.accountId)
 	]);
 	const nextIncome = income[0] ?? null;
 	const incomeDate = window.nextIncomeDate ?? nextIncome?.dueDate ?? null;
 	const projectionDate = incomeDate ? previousDate(incomeDate) : window.monthEnd;
 	const payments = await getUpcomingPayments(db, { ...window, monthEnd: projectionDate });
 	const currentBalanceCents = balances.reduce(
-		(sum, account) => sum + account.current_balance_cents,
+		(sum, account) => sum + (account.balanceCents ?? 0),
 		0
 	);
 	const upcomingPaymentCents = payments.reduce((sum, payment) => sum + payment.amountCents, 0);
@@ -100,6 +99,9 @@ export async function getBalanceBeforeIncomeProjection(
 		currentBalanceCents,
 		upcomingPaymentCents,
 		projectedBalanceCents: currentBalanceCents - upcomingPaymentCents,
+		uninitializedAccountIds: balances
+			.filter((account) => !account.balanceInitialized)
+			.map((account) => account.accountId),
 		upcomingPayments: payments,
 		accountProjections: balances.map((account) => mapAccountProjection(account, payments))
 	};
@@ -159,55 +161,21 @@ function mapPlan(plan: PlanRow, dueDate: string): ExpandedPlan {
 	};
 }
 
-async function getAccountBalances(
-	db: DbClient,
-	asOf: string,
-	accountId?: string,
-	subaccount?: string
-): Promise<AccountBalanceRow[]> {
-	const filter = accountId ? 'WHERE account_id = ?' : '';
-	const subaccountJoin = subaccount ? 'AND t.subaccount = ?' : '';
-	const { results } = await db
-		.prepare(
-			`SELECT account_id, account_name, balance_cents current_balance_cents
-			FROM (
-				SELECT a.id account_id, a.name account_name,
-					CASE
-						WHEN ? IS NOT NULL THEN a.opening_balance_cents + COALESCE(SUM(t.amount_cents), 0)
-						WHEN a.current_balance_cents IS NOT NULL THEN a.current_balance_cents
-						ELSE a.opening_balance_cents + COALESCE(SUM(t.amount_cents), 0)
-					END balance_cents,
-					a.display_order, a.created_at, MIN(a.rowid) row_id
-				FROM accounts a
-				LEFT JOIN transactions t ON t.account_id = a.id AND t.booking_date <= ? ${subaccountJoin}
-				GROUP BY a.id, a.name, a.opening_balance_cents, a.current_balance_cents,
-					a.display_order, a.created_at
-			) ${filter}
-			ORDER BY display_order, created_at, row_id`
-		)
-		.bind(
-			subaccount ?? null,
-			asOf,
-			...(subaccount ? [subaccount] : []),
-			...(accountId ? [accountId] : [])
-		)
-		.all<AccountBalanceRow>();
-	return results;
-}
-
 function mapAccountProjection(
-	account: AccountBalanceRow,
+	account: Awaited<ReturnType<typeof listCalculatedAccountBalances>>[number],
 	payments: UpcomingPayment[]
 ): BalanceBeforeIncomeAccountProjection {
 	const upcomingPaymentCents = payments
-		.filter((payment) => payment.accountId === account.account_id)
+		.filter((payment) => payment.accountId === account.accountId)
 		.reduce((sum, payment) => sum + payment.amountCents, 0);
 	return {
-		accountId: account.account_id,
-		accountName: account.account_name,
-		currentBalanceCents: account.current_balance_cents,
+		accountId: account.accountId,
+		accountName: account.accountName,
+		currentBalanceCents: account.balanceCents,
+		balanceInitialized: account.balanceInitialized,
 		upcomingPaymentCents,
-		projectedBalanceCents: account.current_balance_cents - upcomingPaymentCents
+		projectedBalanceCents:
+			account.balanceCents === null ? null : account.balanceCents - upcomingPaymentCents
 	};
 }
 
@@ -257,10 +225,4 @@ interface ExpandedPlan {
 	amountCents: number;
 	dueDate: string;
 	note: string | null;
-}
-
-interface AccountBalanceRow extends DbRow {
-	account_id: string;
-	account_name: string;
-	current_balance_cents: number;
 }

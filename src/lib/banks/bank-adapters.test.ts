@@ -92,7 +92,7 @@ describe('N26 adapter', () => {
 		expect(result.errors[0]).toMatchObject({ rowNumber: 1, code: 'missing_required_column' });
 	});
 
-	it('stores the N26 Account Name as source.subaccount', () => {
+	it('stores the N26 Account Name as its stable source account key', () => {
 		const csv = [
 			'"Booking Date","Value Date","Partner Name","Partner Iban",Type,"Payment Reference","Account Name","Amount (EUR)","Original Amount","Original Currency","Exchange Rate"',
 			'2026-07-08,,Shop,DE,"Debit Transfer",Coffee,"Hauptkonto",-1.23,,,',
@@ -104,11 +104,13 @@ describe('N26 adapter', () => {
 		expect(result.rows).toHaveLength(2);
 		expect(result.rows[0]?.source).toMatchObject({
 			bankId: 'n26',
-			subaccount: 'Hauptkonto'
+			sourceAccountKey: 'Hauptkonto',
+			sourceAccountLabel: 'Hauptkonto'
 		});
 		expect(result.rows[1]?.source).toMatchObject({
 			bankId: 'n26',
-			subaccount: '20k in 2023'
+			sourceAccountKey: '20k in 2023',
+			sourceAccountLabel: '20k in 2023'
 		});
 	});
 });
@@ -138,6 +140,7 @@ describe('Trade Republic adapter', () => {
 			amountCents: -10000,
 			payee: 'Example Fund'
 		});
+		expect(result.rows.every((row) => row.source.sourceAccountKey === undefined)).toBe(true);
 	});
 
 	it('falls back to a stable fingerprint when transaction_id is empty', () => {
@@ -187,12 +190,14 @@ describe('DKB adapter', () => {
 			currency: 'EUR',
 			payee: 'Example Market',
 			dedupeKey: 'dkb_ref:synthetic-dkb-1|2026-07-01|2026-07-01|-4250',
-			source: {
-				bankId: 'dkb_girocard',
-				rowNumber: 5,
-				rawType: 'Ausgang',
-				externalId: 'synthetic-dkb-1'
-			}
+				source: {
+					bankId: 'dkb_girocard',
+					rowNumber: 5,
+					rawType: 'Ausgang',
+					externalId: 'synthetic-dkb-1',
+					sourceAccountKey: 'DE00000000000000000000',
+					sourceAccountLabel: 'Girokonto'
+				}
 		});
 	});
 
@@ -272,7 +277,13 @@ describe('DKB credit card adapter', () => {
 			amountCents: 10000,
 			payee: 'Synthetic deposit',
 			description: 'Synthetic deposit',
-			source: { bankId: 'dkb_creditcard', rowNumber: 6, rawType: 'Einzahlung' }
+			source: {
+				bankId: 'dkb_creditcard',
+				rowNumber: 6,
+				rawType: 'Einzahlung',
+				sourceAccountKey: 'Synthetic',
+				sourceAccountLabel: 'Kreditkarte'
+			}
 		});
 		expect(result.rows[1]).toMatchObject({
 			amountCents: -2000,

@@ -7,7 +7,7 @@ import {
 } from '../../../../tests/db/test-database';
 import { createAccount } from '$lib/server/accounts/repository';
 import type { DbClient } from '$lib/server/db-client';
-import { confirmImport } from '$lib/server/imports/confirm';
+import { importIntoExistingAccount } from '$lib/server/imports/test-support';
 import { sha256Hex } from '$lib/server/imports/shared';
 import { GET } from './+server';
 
@@ -21,15 +21,16 @@ beforeEach(async () => {
 });
 
 describe('/api/imports', () => {
-	it('lists import batch metadata', async () => {
+	it('lists import run metadata', async () => {
 		const importAccount = await createDkbAccount();
 		const csv = dkbCsv([
 			'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"'
 		]);
-		const report = await confirmImport(db, {
+		const report = await importIntoExistingAccount(db, {
 			accountId: importAccount.accountId,
 			adapterId: importAccount.bankId,
 			csv,
+			reportedBalanceCents: 0,
 			expectedHash: await sha256Hex(csv)
 		});
 
@@ -38,12 +39,11 @@ describe('/api/imports', () => {
 		await expect(response.json()).resolves.toMatchObject({
 			imports: [
 				{
-					id: report.batchId,
-					accountId: importAccount.accountId,
-					accountName: 'DKB Giro',
+					id: report.runId,
 					adapterId: 'dkb_girocard',
 					rowCount: 1,
-					importedCount: 1
+					importedCount: 1,
+					accounts: [{ accountId: importAccount.accountId, accountName: 'DKB Giro' }]
 				}
 			]
 		});

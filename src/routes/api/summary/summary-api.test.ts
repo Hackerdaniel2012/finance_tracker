@@ -6,7 +6,7 @@ import {
 } from '../../../../tests/db/test-database';
 import { createAccount } from '$lib/server/accounts/repository';
 import type { DbClient } from '$lib/server/db-client';
-import { confirmImport } from '$lib/server/imports/confirm';
+import { importIntoExistingAccount } from '$lib/server/imports/test-support';
 import { sha256Hex } from '$lib/server/imports/shared';
 import { GET } from './+server';
 
@@ -37,29 +37,13 @@ describe('/api/summary', () => {
 		});
 	});
 
-	it('filters summary totals by subaccount', async () => {
+	it('filters summary totals by real account', async () => {
 		const account = await seedN26Transactions();
 
 		const allResponse = await GET(
 			event(`http://localhost/api/summary?from=2026-07-01&to=2026-07-31&accountId=${account.id}`)
 		);
 		await expect(allResponse.json()).resolves.toMatchObject({
-			summary: {
-				totals: {
-					incomeCents: 250000,
-					expenseCents: -1634,
-					netCents: 248366,
-					transactionCount: 3
-				}
-			}
-		});
-
-		const mainResponse = await GET(
-			event(
-				`http://localhost/api/summary?from=2026-07-01&to=2026-07-31&accountId=${account.id}&subaccount=Hauptkonto`
-			)
-		);
-		await expect(mainResponse.json()).resolves.toMatchObject({
 			summary: {
 				totals: {
 					incomeCents: 0,
@@ -82,10 +66,11 @@ describe('/api/summary', () => {
 			'2026-07-09,,Cafe,DE,"Debit Transfer",Coffee,"Hauptkonto",-5.00,,,',
 			'2026-07-10,,Refund,DE,"Credit Transfer",Groceries,"Hauptkonto",5.00,,,'
 		]);
-		await confirmImport(db, {
+		await importIntoExistingAccount(db, {
 			accountId: importAccount.accountId,
 			adapterId: importAccount.bankId,
 			csv,
+			reportedBalanceCents: 0,
 			expectedHash: await sha256Hex(csv)
 		});
 		await db
@@ -97,7 +82,7 @@ describe('/api/summary', () => {
 
 		const response = await GET(
 			event(
-				`http://localhost/api/summary?from=2026-05-01&to=2026-07-31&accountId=${account.id}&subaccount=Hauptkonto`
+				`http://localhost/api/summary?from=2026-05-01&to=2026-07-31&accountId=${account.id}`
 			)
 		);
 
@@ -133,10 +118,11 @@ async function seedN26Transactions() {
 		'2026-07-10,,Employer,DE,"Credit Transfer",Salary,"20k in 2023",2500.00,,,'
 	]);
 
-	await confirmImport(db, {
+	await importIntoExistingAccount(db, {
 		accountId: importAccount.accountId,
 		adapterId: importAccount.bankId,
 		csv,
+		reportedBalanceCents: 0,
 		expectedHash: await sha256Hex(csv)
 	});
 
@@ -164,10 +150,11 @@ async function seedTransaction() {
 		'"08.07.26";"08.07.26";"Gebucht";"Me";"Shop";"Groceries";"Ausgang";"DE";"12,34";"";"";"ref-shop"'
 	]);
 
-	await confirmImport(db, {
+	await importIntoExistingAccount(db, {
 		accountId: importAccount.accountId,
 		adapterId: importAccount.bankId,
 		csv,
+		reportedBalanceCents: 0,
 		expectedHash: await sha256Hex(csv)
 	});
 }

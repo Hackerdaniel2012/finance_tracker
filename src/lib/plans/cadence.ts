@@ -21,6 +21,25 @@ export function advanceDate(date: string, cadence: Exclude<Cadence, 'once'>): st
 	return occurrenceDate(date, cadence, 1);
 }
 
+export function previousOccurrenceDate(
+	anchorDate: string,
+	cadence: Exclude<Cadence, 'once'>,
+	steps = 1
+): string {
+	if (!Number.isInteger(steps) || steps < 1)
+		throw new RangeError('Previous occurrence steps must be a positive integer');
+
+	const date = parseDate(anchorDate);
+	if (cadence === 'daily') date.setUTCDate(date.getUTCDate() - steps);
+	else if (cadence === 'weekly') date.setUTCDate(date.getUTCDate() - steps * 7);
+	else if (cadence === 'biweekly') date.setUTCDate(date.getUTCDate() - steps * 14);
+	else {
+		const months = cadence === 'monthly' ? steps : cadence === 'quarterly' ? steps * 3 : steps * 12;
+		setUtcMonthClamped(date, -months);
+	}
+	return formatDate(date);
+}
+
 export function isOccurrenceWithinEndDate(date: string, endDate: string | null): boolean {
 	return endDate === null || date <= endDate;
 }

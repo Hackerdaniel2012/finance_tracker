@@ -3,17 +3,21 @@ import type { DbClient, DbRow, DbStatement } from '../db-client';
 import { insertLiabilityBaseline } from '../liabilities/baselines';
 import { rematchPlans } from './rematching';
 import { assertPlanDates } from './validation';
-import type { CreatePlanInput, Plan, UpdatePlanInput } from './types';
+import type { CreatePlanInput, Plan, PlanTransaction, UpdatePlanInput } from './types';
 
 export async function listPlans(db: DbClient): Promise<Plan[]> {
 	const { results } = await db
 		.prepare(`${selectPlans()} ORDER BY p.status, p.next_date, p.counterparty`)
 		.all<PlanRow>();
-	return results.map(mapPlan);
+	return attachPlanTransactions(
+		db,
+		results.map((row) => mapPlan(row, []))
+	);
 }
 export async function getPlan(db: DbClient, id: string): Promise<Plan | null> {
 	const row = await db.prepare(`${selectPlans()} WHERE p.id = ?`).bind(id).first<PlanRow>();
-	return row ? mapPlan(row) : null;
+	if (!row) return null;
+	return (await attachPlanTransactions(db, [mapPlan(row, [])]))[0];
 }
 export async function createPlan(db: DbClient, input: CreatePlanInput): Promise<Plan> {
 	assertPlanDates(input);
@@ -229,7 +233,7 @@ function selectPlans(): string {
 		(SELECT MAX(t.booking_date) FROM plan_transactions pt JOIN transactions t ON t.id = pt.transaction_id WHERE pt.plan_id = p.id) last_transaction_date
 		FROM plans p LEFT JOIN accounts a ON a.id=p.account_id LEFT JOIN categories c ON c.id=p.category_id`;
 }
-function mapPlan(row: PlanRow): Plan {
+function mapPlan(row: PlanRow, transactions: PlanTransaction[]): Plan {
 	return {
 		id: row.id,
 		accountId: row.account_id,
@@ -250,12 +254,52 @@ function mapPlan(row: PlanRow): Plan {
 		note: row.note,
 		transactionCount: row.transaction_count,
 		lastTransactionDate: row.last_transaction_date,
+		transactions,
 		scheduleAnchorDate: row.schedule_anchor_date ?? row.next_date,
 		scheduleOccurrenceIndex: row.schedule_occurrence_index,
 		manualStatus: row.manual_status ?? row.status,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
+}
+
+async function attachPlanTransactions(db: DbClient, plans: Plan[]): Promise<Plan[]> {
+	if (plans.length === 0) return plans;
+	const byPlan = new Map<string, PlanTransaction[]>();
+	const ids = plans.map((plan) => plan.id);
+	for (let offset = 0; offset < ids.length; offset += 100) {
+		const chunk = ids.slice(offset, offset + 100);
+		const { results } = await db
+			.prepare(
+				`SELECT pt.plan_id, pt.transaction_id, pt.match_kind, pt.scheduled_date,
+					pt.interest_cents, pt.principal_cents, t.booking_date, t.amount_cents,
+					t.payee, t.description, c.name AS category_name
+				FROM plan_transactions pt
+				JOIN transactions t ON t.id = pt.transaction_id
+				LEFT JOIN categories c ON c.id = t.category_id
+				WHERE pt.plan_id IN (${chunk.map(() => '?').join(', ')})
+				ORDER BY t.booking_date DESC, t.id DESC`
+			)
+			.bind(...chunk)
+			.all<PlanTransactionRow>();
+		for (const row of results) {
+			const transactions = byPlan.get(row.plan_id) ?? [];
+			transactions.push({
+				transactionId: row.transaction_id,
+				bookingDate: row.booking_date,
+				amountCents: row.amount_cents,
+				payee: row.payee,
+				description: row.description,
+				categoryName: row.category_name,
+				matchKind: row.match_kind,
+				scheduledDate: row.scheduled_date,
+				interestCents: row.interest_cents,
+				principalCents: row.principal_cents
+			});
+			byPlan.set(row.plan_id, transactions);
+		}
+	}
+	return plans.map((plan) => ({ ...plan, transactions: byPlan.get(plan.id) ?? [] }));
 }
 interface PlanRow extends DbRow {
 	id: string;
@@ -282,6 +326,20 @@ interface PlanRow extends DbRow {
 	manual_status: Plan['status'] | null;
 	created_at: string;
 	updated_at: string;
+}
+
+interface PlanTransactionRow extends DbRow {
+	plan_id: string;
+	transaction_id: string;
+	match_kind: PlanTransaction['matchKind'];
+	scheduled_date: string | null;
+	interest_cents: number | null;
+	principal_cents: number | null;
+	booking_date: string;
+	amount_cents: number;
+	payee: string | null;
+	description: string | null;
+	category_name: string | null;
 }
 
 async function assertLiabilityPlan(

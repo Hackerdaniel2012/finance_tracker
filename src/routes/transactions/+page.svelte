@@ -1,5 +1,9 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import ButtonSpinner from '$lib/components/ButtonSpinner.svelte';
+	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
+	import InlineSuccess from '$lib/components/InlineSuccess.svelte';
+	import Skeleton from '$lib/components/Skeleton.svelte';
 	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { buildAccountScopeOptions, parseAccountScope } from '$lib/account-scope';
 	import { onMount } from 'svelte';
@@ -14,7 +18,6 @@
 		id: string;
 		name: string;
 		institution: string | null;
-		subaccounts: string[];
 	}
 
 	interface Category {
@@ -78,9 +81,10 @@
 	let editTags = $state('');
 	let createRule = $state(false);
 	let ruleName = $state('');
-	let pageStatus = $state(m.transactions_status_loading());
-	let error = $state<string | null>(null);
-	let isLoading = $state(false);
+	let loadError = $state<string | null>(null);
+	let saveError = $state<string | null>(null);
+	let saveSuccess = $state<string | null>(null);
+	let isLoading = $state(true);
 	let isSaving = $state(false);
 
 	const pageStart = $derived(total === 0 ? 0 : offset + 1);
@@ -94,8 +98,7 @@
 
 	async function loadPage() {
 		isLoading = true;
-		pageStatus = m.transactions_status_loading();
-		error = null;
+		loadError = null;
 
 		try {
 			const [accountPayload, categoryPayload, transactionPayload] = await Promise.all([
@@ -107,30 +110,26 @@
 			accounts = accountPayload.accounts;
 			categories = categoryPayload.categories;
 			applyTransactionResult(transactionPayload);
-			pageStatus = m.transactions_status_ready();
 		} catch {
-			pageStatus = m.transactions_status_error();
-			error = m.transactions_status_error();
+			loadError = m.transactions_load_error();
 		} finally {
 			isLoading = false;
 		}
 	}
 
-	async function loadTransactions() {
-		isLoading = true;
-		error = null;
+	async function loadTransactions(showLoading = true) {
+		if (showLoading) isLoading = true;
+		loadError = null;
 
 		try {
 			const payload = await fetchJson<TransactionListResult>(
 				`/api/transactions?${buildQueryString()}`
 			);
 			applyTransactionResult(payload);
-			pageStatus = m.transactions_status_ready();
 		} catch {
-			pageStatus = m.transactions_status_error();
-			error = m.transactions_status_error();
+			loadError = m.transactions_load_error();
 		} finally {
-			isLoading = false;
+			if (showLoading) isLoading = false;
 		}
 	}
 
@@ -175,7 +174,8 @@
 		if (!selected) return;
 
 		isSaving = true;
-		error = null;
+		saveError = null;
+		saveSuccess = null;
 
 		try {
 			const payload = await fetchJson<{ transaction: Transaction }>(
@@ -195,11 +195,10 @@
 
 			selected = payload.transaction;
 			setEditTransaction(payload.transaction);
-			pageStatus = m.transactions_status_saved();
-			await loadTransactions();
+			await loadTransactions(false);
+			saveSuccess = m.transaction_saved_success();
 		} catch {
-			pageStatus = m.transactions_status_error();
-			error = m.transactions_status_error();
+			saveError = m.transaction_save_error();
 		} finally {
 			isSaving = false;
 		}
@@ -217,9 +216,8 @@
 		if (from) params.push(['from', from]);
 		if (to) params.push(['to', to]);
 		if (accountScope) {
-			const { accountId, subaccount } = parseAccountScope(accountScope);
+			const { accountId } = parseAccountScope(accountScope);
 			params.push(['accountId', accountId]);
-			if (subaccount) params.push(['subaccount', subaccount]);
 		}
 		if (statusFilter) params.push(['status', statusFilter]);
 		if (categoryFilter) params.push(['categoryId', categoryFilter]);
@@ -296,14 +294,8 @@
 	<meta name="description" content={m.transactions_subtitle()} />
 </svelte:head>
 
-<main class="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[20rem_1fr] lg:py-8">
-	<section class="space-y-2 lg:col-span-2">
-		<h1 class="text-3xl font-semibold tracking-normal text-zinc-950">{m.transactions_title()}</h1>
-		<p class="max-w-3xl text-sm leading-6 text-zinc-600">{m.transactions_subtitle()}</p>
-		<p class="text-sm text-zinc-500">{pageStatus}</p>
-	</section>
-
-	<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+<main class="mx-auto grid max-w-[90rem] gap-6 px-6 pb-[50px] pt-6 lg:grid-cols-[20rem_1fr] lg:pt-8">
+	<section class="rounded-ui border border-zinc-200 bg-white p-5">
 		<h2 class="text-lg font-semibold text-zinc-950">{m.filters()}</h2>
 		<form class="mt-5 grid gap-4" onsubmit={applyFilters}>
 			<label class="grid gap-1 text-sm font-medium text-zinc-700">
@@ -417,16 +409,13 @@
 				{m.apply_filters()}
 			</button>
 		</form>
-
-		{#if error}
-			<p class="mt-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-				{error}
-			</p>
-		{/if}
 	</section>
 
 	<section class="min-w-0 grid gap-6">
-		<section class="min-w-0 overflow-hidden rounded-ui border border-zinc-200 bg-white shadow-sm">
+		<section
+			class="min-w-0 overflow-hidden rounded-ui border border-zinc-200 bg-white"
+			aria-busy={isLoading}
+		>
 			<div class="flex flex-col gap-3 border-b border-zinc-200 p-5 sm:flex-row sm:justify-between">
 				<div>
 					<h2 class="text-lg font-semibold text-zinc-950">{m.transaction_table()}</h2>
@@ -453,8 +442,28 @@
 					</button>
 				</div>
 			</div>
+			{#if loadError}
+				<ErrorAlert
+					class="m-5"
+					message={loadError}
+					retry={loadTransactions}
+					retryLabel={m.retry()}
+				/>
+			{/if}
 
-			{#if transactions.length === 0}
+			{#if isLoading}
+				<div class="divide-y divide-zinc-100 px-5">
+					{#each Array(6) as _}
+						<div class="grid grid-cols-[6rem_1fr_8rem_8rem_6rem] gap-4 py-4">
+							<Skeleton class="h-5 w-full" />
+							<Skeleton class="h-5 w-full" />
+							<Skeleton class="h-5 w-full" />
+							<Skeleton class="h-5 w-full" />
+							<Skeleton class="h-5 w-full" />
+						</div>
+					{/each}
+				</div>
+			{:else if transactions.length === 0}
 				<p class="p-5 text-sm text-zinc-600">{m.no_transactions()}</p>
 			{:else}
 				<div class="max-w-full overflow-x-auto">
@@ -513,8 +522,14 @@
 			{/if}
 		</section>
 
-		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.edit_transaction()}</h2>
+			{#if saveError}<ErrorAlert class="mt-4" message={saveError} />{/if}
+			{#if saveSuccess}
+				<div class="mt-4">
+					<InlineSuccess message={saveSuccess} onDismiss={() => (saveSuccess = null)} />
+				</div>
+			{/if}
 			{#if selected}
 				<div class="mt-4 rounded border border-zinc-200 bg-zinc-50 p-4 text-sm">
 					<p class="font-medium text-zinc-950">{selected.payee ?? m.not_available()}</p>
@@ -553,10 +568,12 @@
 						</label>
 					{/if}
 					<button
-							class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
+						class="flex h-11 items-center justify-center gap-2 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSaving}
+						aria-busy={isSaving}
 					>
+						{#if isSaving}<ButtonSpinner />{/if}
 						{m.save_transaction()}
 					</button>
 				</form>

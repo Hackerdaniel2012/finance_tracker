@@ -1,5 +1,9 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import ButtonSpinner from '$lib/components/ButtonSpinner.svelte';
+	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
+	import InlineSuccess from '$lib/components/InlineSuccess.svelte';
+	import Skeleton from '$lib/components/Skeleton.svelte';
 	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { onMount } from 'svelte';
 
@@ -86,9 +90,18 @@
 	let rulePattern = $state('');
 	let rulePriority = $state('100');
 	let ruleIsGlobal = $state(true);
-	let status = $state(m.review_status_loading());
-	let error = $state<string | null>(null);
+	let queueError = $state<string | null>(null);
+	let transactionError = $state<string | null>(null);
+	let categoryError = $state<string | null>(null);
+	let ruleError = $state<string | null>(null);
+	let transactionSuccess = $state<string | null>(null);
+	let categorySuccess = $state<string | null>(null);
+	let ruleSuccess = $state<string | null>(null);
+	let isLoadingTransactions = $state(true);
+	let isLoadingCategories = $state(true);
+	let isLoadingRules = $state(true);
 	let isSavingTransaction = $state(false);
+	let isPreviewingRule = $state(false);
 	let isSavingCategory = $state(false);
 	let isSavingRule = $state(false);
 	let isReapplyingRules = $state(false);
@@ -110,25 +123,50 @@
 	});
 
 	async function loadReviewState() {
-		status = m.review_status_loading();
-		error = null;
+		await Promise.all([loadCategories(), loadRules(), loadUnknownTransactions()]);
+	}
+
+	async function loadCategories() {
+		isLoadingCategories = true;
+		categoryError = null;
 
 		try {
-			const [categoryPayload, rulePayload, unknownPayload] = await Promise.all([
-				fetchJson<{ categories: Category[] }>('/api/categories'),
-				fetchJson<{ rules: CategoryRule[] }>('/api/category-rules'),
-				fetchJson<TransactionListResult>(`/api/transactions/unknown${buildUnknownQueueQuery()}`)
-			]);
-
+			const categoryPayload = await fetchJson<{ categories: Category[] }>('/api/categories');
 			categories = categoryPayload.categories;
-			rules = rulePayload.rules;
-			unknownTransactions = unknownPayload.transactions;
-			unknownPagination = unknownPayload.pagination;
 			ruleCategoryId = ruleCategoryId || categories[0]?.id || '';
-			status = m.review_status_ready();
 		} catch {
-			status = m.review_status_error();
-			error = m.review_status_error();
+			categoryError = m.categories_load_error();
+		} finally {
+			isLoadingCategories = false;
+		}
+	}
+
+	async function loadRules() {
+		isLoadingRules = true;
+		ruleError = null;
+		try {
+			const payload = await fetchJson<{ rules: CategoryRule[] }>('/api/category-rules');
+			rules = payload.rules;
+		} catch {
+			ruleError = m.category_rules_load_error();
+		} finally {
+			isLoadingRules = false;
+		}
+	}
+
+	async function loadUnknownTransactions() {
+		isLoadingTransactions = true;
+		queueError = null;
+		try {
+			const payload = await fetchJson<TransactionListResult>(
+				`/api/transactions/unknown${buildUnknownQueueQuery()}`
+			);
+			unknownTransactions = payload.transactions;
+			unknownPagination = payload.pagination;
+		} catch {
+			queueError = m.review_queue_load_error();
+		} finally {
+			isLoadingTransactions = false;
 		}
 	}
 
@@ -136,19 +174,19 @@
 		event.preventDefault();
 		unknownOffset = 0;
 		selectedTransaction = null;
-		await loadReviewState();
+		await loadUnknownTransactions();
 	}
 
 	async function goToPreviousUnknownPage() {
 		unknownOffset = Math.max(0, unknownOffset - unknownPagination.limit);
 		selectedTransaction = null;
-		await loadReviewState();
+		await loadUnknownTransactions();
 	}
 
 	async function goToNextUnknownPage() {
 		unknownOffset = unknownOffset + unknownPagination.limit;
 		selectedTransaction = null;
-		await loadReviewState();
+		await loadUnknownTransactions();
 	}
 
 	function selectTransaction(transaction: Transaction) {
@@ -164,19 +202,27 @@
 
 	async function previewTransactionRule() {
 		if (!selectedTransaction?.payee || !transactionCategoryId) return;
-		transactionRulePreview = await fetchJson('/api/category-rules/preview', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				categoryId: transactionCategoryId,
-				name: transactionRuleName || `Rule for ${selectedTransaction.payee}`,
-				field: 'payee',
-				operator: 'contains',
-				pattern: selectedTransaction.payee,
-				priority: 100,
-				isGlobal: true
-			})
-		});
+		isPreviewingRule = true;
+		transactionError = null;
+		try {
+			transactionRulePreview = await fetchJson('/api/category-rules/preview', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					categoryId: transactionCategoryId,
+					name: transactionRuleName || `Rule for ${selectedTransaction.payee}`,
+					field: 'payee',
+					operator: 'contains',
+					pattern: selectedTransaction.payee,
+					priority: 100,
+					isGlobal: true
+				})
+			});
+		} catch {
+			transactionError = m.rule_preview_error();
+		} finally {
+			isPreviewingRule = false;
+		}
 	}
 
 	async function classifyTransaction(event: SubmitEvent) {
@@ -184,7 +230,8 @@
 		if (!selectedTransaction || !transactionCategoryId) return;
 
 		isSavingTransaction = true;
-		error = null;
+		transactionError = null;
+		transactionSuccess = null;
 
 		try {
 			await fetchJson<{ transaction: Transaction }>(`/api/transactions/${selectedTransaction.id}`, {
@@ -203,11 +250,13 @@
 			});
 
 			selectedTransaction = null;
-			status = m.review_status_saved();
-			await loadReviewState();
+			await Promise.all([
+				loadUnknownTransactions(),
+				transactionCreateRule ? loadRules() : Promise.resolve()
+			]);
+			transactionSuccess = m.classification_saved_success();
 		} catch {
-			status = m.review_status_error();
-			error = m.review_status_error();
+			transactionError = m.classification_save_error();
 		} finally {
 			isSavingTransaction = false;
 		}
@@ -234,7 +283,8 @@
 	async function saveCategory(event: SubmitEvent) {
 		event.preventDefault();
 		isSavingCategory = true;
-		error = null;
+		categoryError = null;
+		categorySuccess = null;
 
 		try {
 			if (selectedCategory) {
@@ -265,11 +315,10 @@
 			}
 
 			startNewCategory();
-			status = m.review_status_saved();
-			await loadReviewState();
+			await loadCategories();
+			categorySuccess = m.category_saved_success();
 		} catch {
-			status = m.review_status_error();
-			error = m.review_status_error();
+			categoryError = m.category_save_error();
 		} finally {
 			isSavingCategory = false;
 		}
@@ -300,7 +349,8 @@
 	async function saveRule(event: SubmitEvent) {
 		event.preventDefault();
 		isSavingRule = true;
-		error = null;
+		ruleError = null;
+		ruleSuccess = null;
 
 		const body = {
 			categoryId: ruleCategoryId,
@@ -328,11 +378,10 @@
 			}
 
 			startNewRule();
-			status = m.review_status_saved();
-			await loadReviewState();
+			await loadRules();
+			ruleSuccess = m.rule_saved_success();
 		} catch {
-			status = m.review_status_error();
-			error = m.review_status_error();
+			ruleError = m.rule_save_error();
 		} finally {
 			isSavingRule = false;
 		}
@@ -340,20 +389,22 @@
 
 	async function reapplyRules() {
 		isReapplyingRules = true;
-		error = null;
+		ruleError = null;
+		ruleSuccess = null;
 
 		try {
-			const { result } = await fetchJson<{ result: { matchedCount: number; unmatchedCount: number } }>(
-				'/api/category-rules/apply',
-				{
-					method: 'POST'
-				}
-			);
-			status = m.rules_applied({ matched: String(result.matchedCount), unmatched: String(result.unmatchedCount) });
-			await loadReviewState();
+			const { result } = await fetchJson<{
+				result: { matchedCount: number; unmatchedCount: number };
+			}>('/api/category-rules/apply', {
+				method: 'POST'
+			});
+			await loadUnknownTransactions();
+			ruleSuccess = m.rules_applied({
+				matched: String(result.matchedCount),
+				unmatched: String(result.unmatchedCount)
+			});
 		} catch {
-			status = m.review_status_error();
-			error = m.review_status_error();
+			ruleError = m.rules_reapply_error();
 		} finally {
 			isReapplyingRules = false;
 		}
@@ -436,19 +487,9 @@
 	<meta name="description" content={m.review_subtitle()} />
 </svelte:head>
 
-<main class="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:py-8">
-	<section class="space-y-2">
-		<h1 class="text-3xl font-semibold tracking-normal text-zinc-950">{m.review_title()}</h1>
-		<p class="max-w-3xl text-sm leading-6 text-zinc-600">{m.review_subtitle()}</p>
-		<p class="text-sm text-zinc-500">{status}</p>
-	</section>
-
-	{#if error}
-		<p class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-	{/if}
-
+<main class="mx-auto grid max-w-[90rem] gap-6 px-6 pb-[50px] pt-6 lg:pt-8">
 	<section class="grid gap-6 xl:grid-cols-[1fr_24rem]">
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white" aria-busy={isLoadingTransactions}>
 			<div class="border-b border-zinc-200 p-5">
 				<div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
 					<div>
@@ -479,8 +520,36 @@
 					</form>
 				</div>
 			</div>
+			{#if queueError}
+				<ErrorAlert
+					class="m-5"
+					message={queueError}
+					retry={loadUnknownTransactions}
+					retryLabel={m.retry()}
+				/>
+			{/if}
+			{#if transactionSuccess}
+				<div class="mx-5 mt-5">
+					<InlineSuccess
+						message={transactionSuccess}
+						onDismiss={() => (transactionSuccess = null)}
+					/>
+				</div>
+			{/if}
 
-			{#if unknownTransactions.length === 0}
+			{#if isLoadingTransactions}
+				<div class="divide-y divide-zinc-100 px-5">
+					{#each Array(5) as _}
+						<div class="grid gap-4 py-4 sm:grid-cols-[8rem_1fr_9rem]">
+							<Skeleton class="h-5 w-24" />
+							<div class="space-y-2">
+								<Skeleton class="h-5 w-44" /><Skeleton class="h-4 w-full" />
+							</div>
+							<Skeleton class="ml-auto h-5 w-20" />
+						</div>
+					{/each}
+				</div>
+			{:else if unknownTransactions.length === 0}
 				<p class="p-5 text-sm text-zinc-600">{m.no_unknown_transactions()}</p>
 			{:else}
 				<div class="divide-y divide-zinc-100">
@@ -534,8 +603,9 @@
 			</div>
 		</section>
 
-		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.classify_transaction()}</h2>
+			{#if transactionError}<ErrorAlert class="mt-4" message={transactionError} />{/if}
 			{#if selectedTransaction}
 				<div class="mt-4 rounded border border-zinc-200 bg-zinc-50 p-4 text-sm">
 					<p class="font-medium text-zinc-950">
@@ -583,10 +653,13 @@
 							<input class="w-full rounded border-zinc-300" bind:value={transactionRuleName} />
 						</label>
 						<button
-							class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700"
+							class="flex h-11 items-center justify-center gap-2 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-50"
 							type="button"
+							disabled={isPreviewingRule}
+							aria-busy={isPreviewingRule}
 							onclick={previewTransactionRule}
 						>
+							{#if isPreviewingRule}<ButtonSpinner />{/if}
 							{m.preview_rule_matches()}
 						</button>
 						{#if transactionRulePreview}
@@ -600,10 +673,12 @@
 						{/if}
 					{/if}
 					<button
-							class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
+						class="flex h-11 items-center justify-center gap-2 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSavingTransaction || !transactionCategoryId}
+						aria-busy={isSavingTransaction}
 					>
+						{#if isSavingTransaction}<ButtonSpinner />{/if}
 						{m.save_classification()}
 					</button>
 				</form>
@@ -614,7 +689,7 @@
 	</section>
 
 	<section class="grid gap-6 xl:grid-cols-2">
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white" aria-busy={isLoadingCategories}>
 			<div class="flex items-center justify-between border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.categories_title()}</h2>
 				<button
@@ -625,22 +700,46 @@
 					{m.new_category()}
 				</button>
 			</div>
+			{#if categoryError}
+				<ErrorAlert
+					class="mx-5 mt-5"
+					message={categoryError}
+					retry={loadCategories}
+					retryLabel={m.retry()}
+				/>
+			{/if}
+			{#if categorySuccess}
+				<div class="mx-5 mt-5">
+					<InlineSuccess message={categorySuccess} onDismiss={() => (categorySuccess = null)} />
+				</div>
+			{/if}
 			<div class="grid gap-5 p-5 lg:grid-cols-[1fr_18rem]">
 				<div class="divide-y divide-zinc-100 rounded-ui border border-zinc-200">
-					{#each categories as category (category.id)}
-						<button
-							class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-zinc-50"
-							class:bg-amber-50={selectedCategory?.id === category.id}
-							type="button"
-							onclick={() => selectCategory(category)}
-						>
-							<span>
-								<span class="block font-medium text-zinc-950">{category.name}</span>
-								<span class="text-xs text-zinc-500">{typeLabel(category.type)}</span>
-							</span>
-							<span class="text-xs text-zinc-500">#{category.sortOrder}</span>
-						</button>
-					{/each}
+					{#if isLoadingCategories}
+						{#each Array(4) as _}
+							<div class="flex items-center justify-between gap-3 px-4 py-3">
+								<div class="space-y-2">
+									<Skeleton class="h-5 w-32" /><Skeleton class="h-4 w-20" />
+								</div>
+								<Skeleton class="h-4 w-10" />
+							</div>
+						{/each}
+					{:else}
+						{#each categories as category (category.id)}
+							<button
+								class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-zinc-50"
+								class:bg-amber-50={selectedCategory?.id === category.id}
+								type="button"
+								onclick={() => selectCategory(category)}
+							>
+								<span>
+									<span class="block font-medium text-zinc-950">{category.name}</span>
+									<span class="text-xs text-zinc-500">{typeLabel(category.type)}</span>
+								</span>
+								<span class="text-xs text-zinc-500">#{category.sortOrder}</span>
+							</button>
+						{:else}<p class="p-4 text-sm text-zinc-600">{m.no_categories()}</p>{/each}
+					{/if}
 				</div>
 				<form class="grid content-start gap-4" onsubmit={saveCategory}>
 					<h3 class="text-sm font-semibold text-zinc-950">
@@ -673,26 +772,30 @@
 						<input class="w-full rounded border-zinc-300" bind:value={categorySortOrder} />
 					</label>
 					<button
-						class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
+						class="flex h-11 items-center justify-center gap-2 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSavingCategory}
+						aria-busy={isSavingCategory}
 					>
+						{#if isSavingCategory}<ButtonSpinner />{/if}
 						{m.save_category()}
 					</button>
 				</form>
 			</div>
 		</section>
 
-		<section class="rounded-ui border border-zinc-200 bg-white shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white" aria-busy={isLoadingRules}>
 			<div class="flex items-center justify-between border-b border-zinc-200 p-5">
 				<h2 class="text-lg font-semibold text-zinc-950">{m.category_rules_title()}</h2>
 				<div class="flex gap-2">
 					<button
-						class="h-11 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-50"
+						class="flex h-11 items-center gap-2 rounded border border-zinc-300 px-3 text-sm font-medium text-zinc-700 disabled:opacity-50"
 						type="button"
 						disabled={isReapplyingRules}
+						aria-busy={isReapplyingRules}
 						onclick={reapplyRules}
 					>
+						{#if isReapplyingRules}<ButtonSpinner />{/if}
 						{m.reapply_rules()}
 					</button>
 					<button
@@ -704,24 +807,45 @@
 					</button>
 				</div>
 			</div>
+			{#if ruleError}
+				<ErrorAlert
+					class="mx-5 mt-5"
+					message={ruleError}
+					retry={loadRules}
+					retryLabel={m.retry()}
+				/>
+			{/if}
+			{#if ruleSuccess}
+				<div class="mx-5 mt-5">
+					<InlineSuccess message={ruleSuccess} onDismiss={() => (ruleSuccess = null)} />
+				</div>
+			{/if}
 			<div class="grid gap-5 p-5 lg:grid-cols-[1fr_18rem]">
 				<div class="divide-y divide-zinc-100 rounded-ui border border-zinc-200">
-					{#each rules as rule (rule.id)}
-						<button
-							class="grid w-full gap-1 px-4 py-3 text-left hover:bg-zinc-50"
-							class:bg-amber-50={selectedRule?.id === rule.id}
-							type="button"
-							onclick={() => selectRule(rule)}
-						>
-							<span class="font-medium text-zinc-950">{rule.name}</span>
-							<span class="text-xs text-zinc-500">
-								{categoryNameFor(rule.categoryId)} / {fieldLabel(rule.field)}
-								{operatorLabel(rule.operator)} "{rule.pattern}"
-							</span>
-						</button>
+					{#if isLoadingRules}
+						{#each Array(4) as _}
+							<div class="space-y-2 px-4 py-3">
+								<Skeleton class="h-5 w-36" /><Skeleton class="h-4 w-full" />
+							</div>
+						{/each}
 					{:else}
-						<p class="p-4 text-sm text-zinc-600">{m.no_category_rules()}</p>
-					{/each}
+						{#each rules as rule (rule.id)}
+							<button
+								class="grid w-full gap-1 px-4 py-3 text-left hover:bg-zinc-50"
+								class:bg-amber-50={selectedRule?.id === rule.id}
+								type="button"
+								onclick={() => selectRule(rule)}
+							>
+								<span class="font-medium text-zinc-950">{rule.name}</span>
+								<span class="text-xs text-zinc-500">
+									{categoryNameFor(rule.categoryId)} / {fieldLabel(rule.field)}
+									{operatorLabel(rule.operator)} "{rule.pattern}"
+								</span>
+							</button>
+						{:else}
+							<p class="p-4 text-sm text-zinc-600">{m.no_category_rules()}</p>
+						{/each}
+					{/if}
 				</div>
 				<form class="grid content-start gap-4" onsubmit={saveRule}>
 					<h3 class="text-sm font-semibold text-zinc-950">
@@ -770,10 +894,12 @@
 						<span>{m.global_rule()}</span>
 					</label>
 					<button
-							class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
+						class="flex h-11 items-center justify-center gap-2 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 						type="submit"
 						disabled={isSavingRule || !ruleCategoryId}
+						aria-busy={isSavingRule}
 					>
+						{#if isSavingRule}<ButtonSpinner />{/if}
 						{m.save_rule()}
 					</button>
 				</form>

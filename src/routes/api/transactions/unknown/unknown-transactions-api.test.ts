@@ -6,7 +6,7 @@ import {
 } from '../../../../../tests/db/test-database';
 import { createAccount } from '$lib/server/accounts/repository';
 import type { DbClient } from '$lib/server/db-client';
-import { confirmImport } from '$lib/server/imports/confirm';
+import { importIntoExistingAccount } from '$lib/server/imports/test-support';
 import { sha256Hex } from '$lib/server/imports/shared';
 import { GET } from './+server';
 
@@ -51,10 +51,11 @@ async function seedUnknownTransaction() {
 		'"09.07.26";"09.07.26";"Gebucht";"Me";"Cafe";"Coffee";"Ausgang";"DE";"4,00";"";"";"ref-cafe"'
 	]);
 
-	await confirmImport(db, {
+	await importIntoExistingAccount(db, {
 		accountId: importAccount.accountId,
 		adapterId: importAccount.bankId,
 		csv,
+		reportedBalanceCents: 0,
 		expectedHash: await sha256Hex(csv)
 	});
 }

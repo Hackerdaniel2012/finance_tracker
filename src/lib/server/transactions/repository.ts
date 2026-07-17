@@ -188,11 +188,6 @@ function buildTransactionWhere(filters: TransactionListFilters): {
 		values.push(filters.accountId);
 	}
 
-	if (filters.subaccount) {
-		clauses.push('t.subaccount = ?');
-		values.push(filters.subaccount);
-	}
-
 	if (filters.categoryId) {
 		clauses.push('t.category_id = ?');
 		values.push(filters.categoryId);

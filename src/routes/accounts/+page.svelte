@@ -1,5 +1,8 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
+	import ButtonSpinner from '$lib/components/ButtonSpinner.svelte';
+	import ErrorAlert from '$lib/components/ErrorAlert.svelte';
+	import InlineSuccess from '$lib/components/InlineSuccess.svelte';
 	import { fetchJsonWithRetry } from '$lib/fetch-json';
 	import { resolve } from '$app/paths';
 	import { untrack } from 'svelte';
@@ -10,27 +13,28 @@
 		id: string;
 		name: string;
 		institution: string | null;
-		openingBalanceCents: number;
-		currentBalanceCents: number | null;
-		balanceCents: number;
+		balanceCents: number | null;
+		balanceInitialized: boolean;
 	}
 
 	let { data } = $props<{ data: PageData }>();
 
 	let accounts = $state<AccountWithBalance[]>(untrack(() => data.accounts as AccountWithBalance[]));
-	let status = $state(m.setup_status_ready());
-	let error = $state<string | null>(null);
+	let createError = $state<string | null>(null);
+	let listError = $state<string | null>(null);
+	let createSuccess = $state<string | null>(null);
+	let listSuccess = $state<string | null>(null);
 	let accountName = $state('');
 	let institutionChoice = $state('');
 	let customInstitution = $state('');
-	let currentBalance = $state('');
 	let isSaving = $state(false);
 	let deletingAccountId = $state<string | null>(null);
 
 	async function createAccount(event: SubmitEvent) {
 		event.preventDefault();
 		isSaving = true;
-		error = null;
+		createError = null;
+		createSuccess = null;
 
 		try {
 			await fetchJson('/api/accounts', {
@@ -41,20 +45,17 @@
 					institution:
 						institutionChoice === 'other'
 							? customInstitution.trim() || null
-							: institutionChoice || null,
-					currentBalanceCents: currentBalance.trim() === '' ? null : eurosToCents(currentBalance)
+							: institutionChoice || null
 				})
 			});
 
 			accountName = '';
 			institutionChoice = '';
 			customInstitution = '';
-			currentBalance = '';
-			status = m.setup_status_saved();
 			await loadAccounts();
+			createSuccess = m.account_created_success();
 		} catch {
-			status = m.setup_status_error();
-			error = m.setup_status_error();
+			createError = m.account_create_error();
 		} finally {
 			isSaving = false;
 		}
@@ -71,18 +72,18 @@
 		}
 
 		deletingAccountId = account.id;
-		error = null;
+		listError = null;
+		listSuccess = null;
 
 		try {
 			await fetchJson(`/api/accounts/${account.id}`, {
 				method: 'DELETE'
 			});
 
-			status = m.account_deleted();
 			await loadAccounts();
+			listSuccess = m.account_deleted_success();
 		} catch {
-			status = m.setup_status_error();
-			error = m.setup_status_error();
+			listError = m.account_delete_error();
 		} finally {
 			deletingAccountId = null;
 		}
@@ -92,20 +93,11 @@
 		return fetchJsonWithRetry<T>(url, init);
 	}
 
-	function eurosToCents(value: string): number {
-		const parsed = Number.parseFloat(value.trim().replace(',', '.'));
-		return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
-	}
-
 	function centsToEuros(value: number): string {
 		return (value / 100).toLocaleString(undefined, {
 			style: 'currency',
 			currency: 'EUR'
 		});
-	}
-
-	function accountBalance(account: AccountWithBalance): number {
-		return account.balanceCents;
 	}
 </script>
 
@@ -113,17 +105,17 @@
 	<title>{m.account_summary_title()} | {m.app_title()}</title>
 </svelte:head>
 
-<main class="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:py-8">
-	<section class="space-y-2 lg:col-span-2">
-		<h1 class="text-3xl font-semibold text-zinc-950">{m.account_summary_title()}</h1>
-		<p class="text-sm text-zinc-500">{status}</p>
-		{#if error}
-			<p class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-		{/if}
-	</section>
-
-	<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+<main
+	class="mx-auto grid max-w-[90rem] gap-6 px-6 pb-[50px] pt-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:pt-8"
+>
+	<section class="rounded-ui border border-zinc-200 bg-white p-5">
 		<h2 class="text-lg font-semibold text-zinc-950">{m.accounts()}</h2>
+		{#if listError}<ErrorAlert class="mt-4" message={listError} />{/if}
+		{#if listSuccess}
+			<div class="mt-4">
+				<InlineSuccess message={listSuccess} onDismiss={() => (listSuccess = null)} />
+			</div>
+		{/if}
 		<div class="mt-5 divide-y divide-zinc-200">
 			{#if accounts.length === 0}
 				<p class="py-4 text-sm text-zinc-500">{m.no_accounts()}</p>
@@ -133,7 +125,9 @@
 						<div>
 							<h3 class="font-semibold text-zinc-950">{account.name}</h3>
 							<p class="mt-1 text-sm text-zinc-600">
-								{account.institution || m.institution()} / {centsToEuros(accountBalance(account))}
+								{account.institution || m.institution()} / {account.balanceCents === null
+									? m.balance_not_initialized()
+									: centsToEuros(account.balanceCents)}
 							</p>
 						</div>
 						<div class="flex flex-wrap items-center gap-2">
@@ -144,11 +138,13 @@
 								{m.view_account()}
 							</a>
 							<button
-								class="h-11 rounded border border-red-200 px-3 text-sm font-medium text-red-700 disabled:opacity-50"
+								class="flex h-11 items-center gap-2 rounded border border-red-200 px-3 text-sm font-medium text-red-700 disabled:opacity-50"
 								type="button"
 								disabled={deletingAccountId === account.id}
+								aria-busy={deletingAccountId === account.id}
 								onclick={() => deleteAccount(account)}
 							>
+								{#if deletingAccountId === account.id}<ButtonSpinner />{/if}
 								{m.delete_account()}
 							</button>
 						</div>
@@ -159,8 +155,14 @@
 	</section>
 
 	<aside class="space-y-6">
-		<section class="rounded-ui border border-zinc-200 bg-white p-5 shadow-sm">
+		<section class="rounded-ui border border-zinc-200 bg-white p-5">
 			<h2 class="text-lg font-semibold text-zinc-950">{m.setup_title()}</h2>
+			{#if createError}<ErrorAlert class="mt-4" message={createError} />{/if}
+			{#if createSuccess}
+				<div class="mt-4">
+					<InlineSuccess message={createSuccess} onDismiss={() => (createSuccess = null)} />
+				</div>
+			{/if}
 			<form class="mt-5 grid gap-4" onsubmit={createAccount}>
 				<label class="grid gap-1 text-sm font-medium text-zinc-700">
 					<span>{m.account_name()}</span>
@@ -186,19 +188,13 @@
 						<input class="w-full rounded border-zinc-300" bind:value={customInstitution} required />
 					</label>
 				{/if}
-				<label class="grid gap-1 text-sm font-medium text-zinc-700">
-					<span>{m.current_balance()}</span>
-					<input
-						class="w-full rounded border-zinc-300"
-						inputmode="decimal"
-						bind:value={currentBalance}
-					/>
-				</label>
 				<button
-					class="h-11 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
+					class="flex h-11 items-center justify-center gap-2 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 					type="submit"
 					disabled={isSaving}
+					aria-busy={isSaving}
 				>
+					{#if isSaving}<ButtonSpinner />{/if}
 					{m.create_account()}
 				</button>
 			</form>

@@ -21,8 +21,6 @@ export const load: PageLoad = async ({ fetch, params }) => {
 			id: string;
 			name: string;
 			institution: string | null;
-			openingBalanceCents: number;
-			currentBalanceCents: number | null;
 		};
 	};
 	const { summary } = (await summaryResponse.json()) as {
@@ -38,7 +36,8 @@ export const load: PageLoad = async ({ fetch, params }) => {
 			byAccount: Array<{
 				accountId: string;
 				accountName: string;
-				balanceCents: number;
+				balanceCents: number | null;
+				balanceInitialized: boolean;
 			}>;
 			byCategory: Array<{
 				categoryId: string | null;

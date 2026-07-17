@@ -42,7 +42,6 @@ export interface Transaction {
 
 export interface TransactionListFilters {
 	accountId?: string;
-	subaccount?: string;
 	categoryId?: string;
 	status?: TransactionClassificationStatus;
 	transactionDirection?: TransactionDirection;
