@@ -5,8 +5,10 @@ import {
 	createTestDbClient
 } from '../../../../../tests/db/test-database';
 import type { DbClient } from '$lib/server/db-client';
+import { confirmImport } from '$lib/server/imports/confirm';
 import { previewImport } from '$lib/server/imports/preview';
 import { sha256Hex } from '$lib/server/imports/shared';
+import { n26Csv, n26UpdateCsv } from '$lib/server/imports/preview.test';
 import { POST } from './+server';
 
 let db: DbClient;
@@ -35,6 +37,50 @@ describe('/api/imports/confirm', () => {
 			report: {
 				importedCount: 1,
 				accounts: [{ accountName: 'Imported DKB', createdAccount: true }]
+			}
+		});
+	});
+
+	it('returns a nullable reported balance for snapshot continuation', async () => {
+		const csv = n26Csv().split('\n').slice(0, 3).join('\n');
+		const initialAssignments = [
+			{
+				sourceAccountKey: 'Main',
+				newAccount: { name: 'N26 Main', institution: 'N26' },
+				balanceMode: 'complete_history' as const
+			}
+		];
+		const initial = await previewImport(db, {
+			adapterId: 'n26',
+			csv,
+			assignments: initialAssignments
+		});
+		await confirmImport(db, {
+			adapterId: 'n26',
+			csv,
+			expectedHash: initial.fileHash,
+			expectedConfigurationHash: initial.configurationHash!,
+			assignments: initialAssignments
+		});
+		const updateCsv = n26UpdateCsv().split('\n').slice(0, 3).join('\n');
+		const update = await previewImport(db, { adapterId: 'n26', csv: updateCsv });
+		const data = form(updateCsv, update.fileHash, update.configurationHash!);
+		data.set('adapterId', 'n26');
+		data.set('assignments', JSON.stringify(update.accounts.map((group) => group.assignment)));
+
+		const response = await POST(event(data));
+
+		expect(response.status).toBe(201);
+		await expect(response.json()).resolves.toMatchObject({
+			report: {
+				importedCount: 1,
+				duplicateCount: 1,
+				accounts: [
+					{
+						balanceMode: 'continue_from_snapshot',
+						reportedBalanceCents: null
+					}
+				]
 			}
 		});
 	});

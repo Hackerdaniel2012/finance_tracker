@@ -46,18 +46,26 @@ export async function confirmImport(
 	const statements: DbStatement[] = [];
 	const accountReports: ImportAccountReport[] = [];
 	const batchIds: string[] = [];
+	const transactionRows: TransactionInsertRow[] = [];
+	const reviewFlagRows: ReviewFlagInsertRow[] = [];
 
 	statements.push(
 		createRunStatement(db, {
 			runId,
 			fileHash,
 			adapterId: prepared.preview.adapterId,
-			...prepared.preview.summary
+			parsedRows: prepared.preview.summary.parsedRows,
+			errorCount: prepared.preview.summary.errorCount,
+			startDate: prepared.preview.summary.startDate,
+			endDate: prepared.preview.summary.endDate,
+			importedCount: prepared.groups.reduce((sum, group) => sum + group.rows.length, 0),
+			duplicateCount: prepared.groups.reduce(
+				(sum, group) => sum + group.preview.duplicateRows.length,
+				0
+			)
 		})
 	);
-	statements.push(
-		createFileClaimStatement(db, runId, prepared.preview.adapterId, fileHash)
-	);
+	statements.push(createFileClaimStatement(db, runId, prepared.preview.adapterId, fileHash));
 
 	for (const [groupIndex, group] of prepared.groups.entries()) {
 		const assignment = group.preview.assignment!;
@@ -104,21 +112,41 @@ export async function confirmImport(
 		for (const row of group.rows) {
 			const match = matchCategoryRule(row, rules);
 			const transactionId = crypto.randomUUID();
-			statements.push(
-				insertTransactionStatement(db, {
+			transactionRows.push({
+				id: transactionId,
+				accountId,
+				importBatchId: batchId,
+				categoryId: match?.categoryId ?? null,
+				dedupeKey: row.dedupeKey,
+				bookingDate: row.bookingDate,
+				valueDate: row.valueDate ?? null,
+				amountCents: row.amountCents,
+				currency: row.currency,
+				originalAmountCents: row.originalAmountCents ?? null,
+				originalCurrency: row.originalCurrency ?? null,
+				exchangeRate: row.exchangeRate ?? null,
+				balanceAfterCents: row.balanceAfterCents ?? null,
+				payee: row.payee ?? null,
+				description: row.description ?? null,
+				note: row.note ?? null,
+				searchText: row.searchText,
+				classificationStatus: match ? 'auto' : 'unknown',
+				sourceAccountKey: row.source.sourceAccountKey ?? null
+			});
+			if (!match) {
+				reviewFlagRows.push({
+					id: crypto.randomUUID(),
 					transactionId,
-					accountId,
-					batchId,
-					categoryId: match?.categoryId ?? null,
-					classificationStatus: match ? 'auto' : 'unknown',
-					row
-				})
-			);
-			if (!match) statements.push(insertReviewFlagStatement(db, transactionId));
+					reason: 'unknown_category'
+				});
+			}
 		}
 
 		if (!group.preview.targetBalanceInitialized) {
 			if (!group.preview.endDate) throw new ValidationError('Account group has no valid rows');
+			if (reportedBalanceCents === null) {
+				throw new ValidationError('A balance is required to initialize an account');
+			}
 			statements.push(
 				createBalanceSnapshotStatement(db, {
 					accountId,
@@ -145,6 +173,13 @@ export async function confirmImport(
 			reportedBalanceCents,
 			calculatedBalanceCents: group.preview.calculatedBalanceCents
 		});
+	}
+
+	if (transactionRows.length > 0) {
+		statements.push(createTransactionsStatement(db, transactionRows));
+	}
+	if (reviewFlagRows.length > 0) {
+		statements.push(createReviewFlagsStatement(db, reviewFlagRows));
 	}
 
 	for (const error of prepared.preview.errors) {
@@ -217,10 +252,9 @@ function createRunStatement(
 		fileHash: string;
 		adapterId: string;
 		parsedRows: number;
-		skippedRows: number;
 		errorCount: number;
-		accountCount: number;
-		duplicateEstimate: number;
+		importedCount: number;
+		duplicateCount: number;
 		startDate: string | null;
 		endDate: string | null;
 	}
@@ -239,8 +273,8 @@ function createRunStatement(
 			input.startDate,
 			input.endDate,
 			input.parsedRows,
-			input.parsedRows - input.duplicateEstimate,
-			input.duplicateEstimate,
+			input.importedCount,
+			input.duplicateCount,
 			input.errorCount
 		);
 }
@@ -308,7 +342,7 @@ function createBatchStatement(
 		importedCount: number;
 		duplicateCount: number;
 		errorCount: number;
-		reportedBalanceCents: number;
+		reportedBalanceCents: number | null;
 		calculatedBalanceCents: number | null;
 	}
 ): DbStatement {
@@ -358,17 +392,7 @@ function createBalanceSnapshotStatement(
 		);
 }
 
-function insertTransactionStatement(
-	db: DbClient,
-	input: {
-		transactionId: string;
-		accountId: string;
-		batchId: string;
-		categoryId: string | null;
-		classificationStatus: 'auto' | 'unknown';
-		row: NormalizedTransaction;
-	}
-): DbStatement {
+function createTransactionsStatement(db: DbClient, rows: TransactionInsertRow[]): DbStatement {
 	return db
 		.prepare(
 			`INSERT INTO transactions (
@@ -376,38 +400,43 @@ function insertTransactionStatement(
 				booking_date, value_date, amount_cents, currency, original_amount_cents,
 				original_currency, exchange_rate, balance_after_cents, payee, description,
 				note, search_text, classification_status, source_account_key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			)
+			SELECT
+				json_extract(value, '$.id'),
+				json_extract(value, '$.accountId'),
+				json_extract(value, '$.importBatchId'),
+				json_extract(value, '$.categoryId'),
+				json_extract(value, '$.dedupeKey'),
+				json_extract(value, '$.bookingDate'),
+				json_extract(value, '$.valueDate'),
+				json_extract(value, '$.amountCents'),
+				json_extract(value, '$.currency'),
+				json_extract(value, '$.originalAmountCents'),
+				json_extract(value, '$.originalCurrency'),
+				json_extract(value, '$.exchangeRate'),
+				json_extract(value, '$.balanceAfterCents'),
+				json_extract(value, '$.payee'),
+				json_extract(value, '$.description'),
+				json_extract(value, '$.note'),
+				json_extract(value, '$.searchText'),
+				json_extract(value, '$.classificationStatus'),
+				json_extract(value, '$.sourceAccountKey')
+			FROM json_each(?)`
 		)
-		.bind(
-			input.transactionId,
-			input.accountId,
-			input.batchId,
-			input.categoryId,
-			input.row.dedupeKey,
-			input.row.bookingDate,
-			input.row.valueDate ?? null,
-			input.row.amountCents,
-			input.row.currency,
-			input.row.originalAmountCents ?? null,
-			input.row.originalCurrency ?? null,
-			input.row.exchangeRate ?? null,
-			input.row.balanceAfterCents ?? null,
-			input.row.payee ?? null,
-			input.row.description ?? null,
-			input.row.note ?? null,
-			input.row.searchText,
-			input.classificationStatus,
-			input.row.source.sourceAccountKey ?? null
-		);
+		.bind(JSON.stringify(rows));
 }
 
-function insertReviewFlagStatement(db: DbClient, transactionId: string): DbStatement {
+function createReviewFlagsStatement(db: DbClient, rows: ReviewFlagInsertRow[]): DbStatement {
 	return db
 		.prepare(
 			`INSERT INTO transaction_review_flags (id, transaction_id, reason)
-			VALUES (?, ?, ?)`
+			SELECT
+				json_extract(value, '$.id'),
+				json_extract(value, '$.transactionId'),
+				json_extract(value, '$.reason')
+			FROM json_each(?)`
 		)
-		.bind(crypto.randomUUID(), transactionId, 'unknown_category');
+		.bind(JSON.stringify(rows));
 }
 
 function insertRowErrorStatement(db: DbClient, batchId: string, error: ParseError): DbStatement {
@@ -422,10 +451,12 @@ function insertRowErrorStatement(db: DbClient, batchId: string, error: ParseErro
 function getReportedBalance(
 	assignment: ImportAccountAssignment,
 	calculatedBalanceCents: number | null
-): number {
+): number | null {
 	return assignment.balanceMode === 'complete_history'
 		? calculatedBalanceCents!
-		: assignment.reportedBalanceCents!;
+		: assignment.balanceMode === 'reported'
+			? assignment.reportedBalanceCents!
+			: null;
 }
 
 async function runImportWriteBatch(db: DbClient, statements: DbStatement[]): Promise<void> {
@@ -467,4 +498,32 @@ interface IdRow extends DbRow {
 interface UnknownCountRow extends DbRow {
 	account_id: string;
 	unknown_count: number;
+}
+
+interface TransactionInsertRow {
+	id: string;
+	accountId: string;
+	importBatchId: string;
+	categoryId: string | null;
+	dedupeKey: string;
+	bookingDate: string;
+	valueDate: string | null;
+	amountCents: number;
+	currency: string;
+	originalAmountCents: number | null;
+	originalCurrency: string | null;
+	exchangeRate: string | null;
+	balanceAfterCents: number | null;
+	payee: string | null;
+	description: string | null;
+	note: string | null;
+	searchText: string;
+	classificationStatus: 'auto' | 'unknown';
+	sourceAccountKey: string | null;
+}
+
+interface ReviewFlagInsertRow {
+	id: string;
+	transactionId: string;
+	reason: 'unknown_category';
 }

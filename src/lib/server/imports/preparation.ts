@@ -37,7 +37,10 @@ export async function prepareImport(
 	const mappings = await getMappings(db, adapter.id);
 	const parsedAssignments =
 		input.assignments === undefined ? null : parseImportAccountAssignments(input.assignments);
-	const assignments = parsedAssignments ? validateAssignmentSet(parsedAssignments, groups) : null;
+	const assignments = parsedAssignments
+		? validateAssignmentSet(parsedAssignments, groups)
+		: await resolveAutomaticAssignments(db, groups, mappings);
+	const configurationResolved = assignments.size === groups.length;
 	const preparedGroups: PreparedImportGroup[] = [];
 
 	for (const group of groups) {
@@ -54,27 +57,41 @@ export async function prepareImport(
 	}
 
 	const range = getDateRange(parsed.rows.map((row) => row.bookingDate));
-	const duplicateEstimate = preparedGroups.reduce(
+	const duplicateCount = preparedGroups.reduce(
 		(sum, group) => sum + group.preview.duplicateRows.length,
 		0
 	);
+	const newRowCount = preparedGroups.reduce(
+		(sum, group) => sum + (group.preview.importableRowCount ?? 0),
+		0
+	);
+	const status = !configurationResolved
+		? 'needs_configuration'
+		: newRowCount === 0
+			? 'no_new_transactions'
+			: 'ready';
 	return {
 		groups: preparedGroups,
 		preview: {
 			adapterId: adapter.id,
 			fileHash: await sha256Hex(input.csv),
-			configurationHash: assignments
+			configurationHash: configurationResolved
 				? await sha256Hex(
-						JSON.stringify(groups.map((group) => assignments.get(groupKey(group.sourceAccountKey))))
+						JSON.stringify(
+							groups.map((group) =>
+								canonicalAssignment(assignments.get(groupKey(group.sourceAccountKey))!)
+							)
+						)
 					)
 				: null,
-			readyToConfirm: assignments !== null,
+			status,
 			summary: {
 				parsedRows: parsed.rows.length,
 				skippedRows: parsed.skippedRows,
 				errorCount: parsed.errors.length,
 				accountCount: groups.length,
-				duplicateEstimate,
+				newRowCount: configurationResolved ? newRowCount : null,
+				duplicateCount: configurationResolved ? duplicateCount : null,
 				...range
 			},
 			metadata: parsed.metadata ?? {},
@@ -129,19 +146,19 @@ async function prepareGroup(
 		: new Map();
 	const partition = partitionImportRows(group.rows, existing);
 	const snapshot = account ? await getLatestBalanceSnapshot(db, account.id) : null;
-	if (snapshot && assignment.balanceMode !== 'reported') {
-		throw new ValidationError('Initialized accounts require a reported balance');
+	if (snapshot && assignment.balanceMode === 'complete_history') {
+		throw new ValidationError('Initialized accounts cannot use complete history');
 	}
 
 	let calculatedBalanceCents: number | null = null;
-	let reportedBalanceCents: number;
+	let reportedBalanceCents: number | null = null;
 	if (assignment.balanceMode === 'complete_history') {
 		if (!range.endDate) throw new ValidationError('Account group has no valid rows');
 		const existingTotal = account ? await getTransactionTotal(db, account.id, range.endDate) : 0;
 		calculatedBalanceCents =
 			existingTotal + partition.rows.reduce((sum, row) => sum + row.amountCents, 0);
 		reportedBalanceCents = calculatedBalanceCents;
-	} else {
+	} else if (assignment.balanceMode === 'reported') {
 		if (!Number.isInteger(assignment.reportedBalanceCents)) {
 			throw new ValidationError('reportedBalanceCents must be an integer');
 		}
@@ -149,10 +166,17 @@ async function prepareGroup(
 		calculatedBalanceCents = snapshot
 			? await calculateBalanceAfterCandidates(db, account!.id, partition.rows)
 			: null;
+	} else {
+		if (!account || !snapshot) {
+			throw new ValidationError('Balance continuation requires an initialized existing account');
+		}
+		calculatedBalanceCents = await calculateBalanceAfterCandidates(db, account.id, partition.rows);
 	}
 	const differenceCents =
-		calculatedBalanceCents === null ? null : reportedBalanceCents - calculatedBalanceCents;
-	if (snapshot && differenceCents !== 0) {
+		calculatedBalanceCents === null || reportedBalanceCents === null
+			? null
+			: reportedBalanceCents - calculatedBalanceCents;
+	if (snapshot && assignment.balanceMode === 'reported' && differenceCents !== 0) {
 		throw new ConflictError('Reported balance does not match the calculated balance');
 	}
 
@@ -199,8 +223,15 @@ function validateAssignmentSet(
 			targetIds.add(id);
 			assignment = { ...assignment, targetAccountId: id };
 		}
-		if (assignment.balanceMode !== 'reported' && assignment.balanceMode !== 'complete_history') {
+		if (
+			assignment.balanceMode !== 'reported' &&
+			assignment.balanceMode !== 'complete_history' &&
+			assignment.balanceMode !== 'continue_from_snapshot'
+		) {
 			throw new ValidationError('balanceMode is invalid');
+		}
+		if (assignment.balanceMode === 'continue_from_snapshot' && !hasExisting) {
+			throw new ValidationError('Balance continuation requires an existing account');
 		}
 		result.set(key, assignment);
 	}
@@ -239,6 +270,19 @@ function groupKey(value: string | null): string {
 	return value === null ? keylessGroup : `key:${value}`;
 }
 
+function canonicalAssignment(assignment: ImportAccountAssignment): ImportAccountAssignment {
+	return {
+		sourceAccountKey: assignment.sourceAccountKey,
+		...(assignment.targetAccountId
+			? { targetAccountId: assignment.targetAccountId }
+			: { newAccount: assignment.newAccount }),
+		balanceMode: assignment.balanceMode,
+		...(assignment.balanceMode === 'reported'
+			? { reportedBalanceCents: assignment.reportedBalanceCents }
+			: {})
+	};
+}
+
 async function getMappings(db: DbClient, adapterId: BankId): Promise<Map<string, string>> {
 	const { results } = await db
 		.prepare(
@@ -247,6 +291,30 @@ async function getMappings(db: DbClient, adapterId: BankId): Promise<Map<string,
 		.bind(adapterId)
 		.all<MappingRow>();
 	return new Map(results.map((row) => [row.source_account_key, row.account_id]));
+}
+
+async function resolveAutomaticAssignments(
+	db: DbClient,
+	groups: GroupedRows[],
+	mappings: Map<string, string>
+): Promise<Map<string, ImportAccountAssignment>> {
+	const assignments = new Map<string, ImportAccountAssignment>();
+	for (const group of groups) {
+		if (group.sourceAccountKey === null) continue;
+		const targetAccountId = mappings.get(group.sourceAccountKey);
+		if (!targetAccountId) continue;
+		const [account, snapshot] = await Promise.all([
+			getAccount(db, targetAccountId),
+			getLatestBalanceSnapshot(db, targetAccountId)
+		]);
+		if (!account || !snapshot) continue;
+		assignments.set(groupKey(group.sourceAccountKey), {
+			sourceAccountKey: group.sourceAccountKey,
+			targetAccountId,
+			balanceMode: 'continue_from_snapshot'
+		});
+	}
+	return assignments;
 }
 
 async function getTransactionTotal(

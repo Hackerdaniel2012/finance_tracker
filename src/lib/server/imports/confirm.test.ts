@@ -11,7 +11,8 @@ import { createAccount } from '../accounts/repository';
 import { createPlan } from '../plans/repository';
 import { confirmImport } from './confirm';
 import { previewImport } from './preview';
-import { n26Csv } from './preview.test';
+import { deleteImportRun } from './repository';
+import { n26Csv, n26UpdateCsv } from './preview.test';
 
 let db: DbClient;
 let sqlite: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -40,7 +41,7 @@ describe('confirmImport', () => {
 			}
 		];
 		const checked = await previewImport(db, { adapterId: 'n26', csv, assignments });
-		expect(checked.readyToConfirm).toBe(true);
+		expect(checked.status).toBe('ready');
 		expect(checked.accounts[0].calculatedBalanceCents).toBe(98000);
 
 		const report = await confirmImport(db, {
@@ -59,6 +60,118 @@ describe('confirmImport', () => {
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(DISTINCT account_id) FROM transactions')).toBe(
 			2
 		);
+	});
+
+	it('bulk-inserts large files within the D1 free-tier query budget', async () => {
+		const header =
+			'"Booking Date","Value Date","Partner Name","Partner Iban",Type,"Payment Reference","Account Name","Amount (EUR)","Original Amount","Original Currency","Exchange Rate"';
+		const csv = [
+			header,
+			...Array.from(
+				{ length: 60 },
+				(_, index) =>
+					`2026-07-08,2026-07-08,Example ${index},,Synthetic,Reference ${index},Main,1.00,,,`
+			)
+		].join('\n');
+		const assignments = [
+			{
+				sourceAccountKey: 'Main',
+				newAccount: { name: 'Bulk import', institution: 'N26' },
+				balanceMode: 'complete_history' as const
+			}
+		];
+		const preview = await previewImport(db, { adapterId: 'n26', csv, assignments });
+		let writeStatementCount = 0;
+		const countingDb: DbClient = {
+			prepare(sql) {
+				return db.prepare(sql);
+			},
+			async batch(statements) {
+				writeStatementCount = statements.length;
+				return db.batch!(statements);
+			}
+		};
+
+		const report = await confirmImport(countingDb, {
+			adapterId: 'n26',
+			csv,
+			expectedHash: preview.fileHash,
+			expectedConfigurationHash: preview.configurationHash!,
+			assignments
+		});
+
+		expect(report.importedCount).toBe(60);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(60);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transaction_review_flags')).toBe(60);
+		expect(writeStatementCount).toBeLessThan(50);
+	});
+
+	it('imports only new rows from an overlapping update and reverses that update independently', async () => {
+		const csv = n26Csv();
+		const initialAssignments = [
+			{
+				sourceAccountKey: 'Main',
+				newAccount: { name: 'N26 Main', institution: 'N26' },
+				balanceMode: 'complete_history' as const
+			},
+			{
+				sourceAccountKey: 'Savings',
+				newAccount: { name: 'N26 Savings', institution: 'N26' },
+				balanceMode: 'complete_history' as const
+			}
+		];
+		const initial = await previewImport(db, {
+			adapterId: 'n26',
+			csv,
+			assignments: initialAssignments
+		});
+		await confirmImport(db, {
+			adapterId: 'n26',
+			csv,
+			expectedHash: initial.fileHash,
+			expectedConfigurationHash: initial.configurationHash!,
+			assignments: initialAssignments
+		});
+
+		const updateCsv = n26UpdateCsv();
+		const update = await previewImport(db, { adapterId: 'n26', csv: updateCsv });
+		const updateAssignments = update.accounts.map((group) => group.assignment!);
+		const report = await confirmImport(db, {
+			adapterId: 'n26',
+			csv: updateCsv,
+			expectedHash: update.fileHash,
+			expectedConfigurationHash: update.configurationHash!,
+			assignments: updateAssignments
+		});
+
+		expect(report).toMatchObject({ importedCount: 2, duplicateCount: 2 });
+		expect(report.accounts).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					balanceMode: 'continue_from_snapshot',
+					reportedBalanceCents: null
+				})
+			])
+		);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM account_balance_snapshots')).toBe(2);
+		expect(
+			firstValue<number>(
+				sqlite,
+				`SELECT COUNT(*) FROM import_batches
+				WHERE import_run_id = '${report.runId}' AND reported_balance_cents IS NULL`
+			)
+		).toBe(2);
+		expect(
+			(await listCalculatedAccountBalances(db, '9999-12-31')).map((row) => row.balanceCents)
+		).toEqual([97500, 10500]);
+
+		await deleteImportRun(db, report.runId);
+
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_runs')).toBe(1);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM transactions')).toBe(3);
+		expect(
+			(await listCalculatedAccountBalances(db, '9999-12-31')).map((row) => row.balanceCents)
+		).toEqual([98000, 10000]);
 	});
 
 	it('rejects a changed file and a repeated run', async () => {
@@ -95,6 +208,46 @@ describe('confirmImport', () => {
 				assignments
 			})
 		).rejects.toThrow('already exists');
+	});
+
+	it('does not create a run for a different file containing only imported rows', async () => {
+		const csv = n26Csv().split('\n').slice(0, 3).join('\n');
+		const initialAssignments = [
+			{
+				sourceAccountKey: 'Main',
+				newAccount: { name: 'N26 Main', institution: 'N26' },
+				balanceMode: 'complete_history' as const
+			}
+		];
+		const initial = await previewImport(db, {
+			adapterId: 'n26',
+			csv,
+			assignments: initialAssignments
+		});
+		await confirmImport(db, {
+			adapterId: 'n26',
+			csv,
+			expectedHash: initial.fileHash,
+			expectedConfigurationHash: initial.configurationHash!,
+			assignments: initialAssignments
+		});
+		const duplicateOnlyCsv = [csv.split('\n')[0], csv.split('\n')[2]].join('\n');
+		const duplicateOnly = await previewImport(db, {
+			adapterId: 'n26',
+			csv: duplicateOnlyCsv
+		});
+
+		expect(duplicateOnly.status).toBe('no_new_transactions');
+		await expect(
+			confirmImport(db, {
+				adapterId: 'n26',
+				csv: duplicateOnlyCsv,
+				expectedHash: duplicateOnly.fileHash,
+				expectedConfigurationHash: duplicateOnly.configurationHash!,
+				assignments: duplicateOnly.accounts.map((group) => group.assignment!)
+			})
+		).rejects.toThrow('No new transactions to import');
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_runs')).toBe(1);
 	});
 
 	it('maps a concurrent duplicate file insertion to a conflict without partial writes', async () => {

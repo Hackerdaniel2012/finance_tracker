@@ -1,7 +1,8 @@
 import type { BankId, NormalizedTransaction, ParseError } from '$lib/banks';
 import type { DuplicateImportRow } from './deduplication';
 
-export type ImportBalanceMode = 'reported' | 'complete_history';
+export type ImportBalanceMode = 'reported' | 'complete_history' | 'continue_from_snapshot';
+export type ImportPreviewStatus = 'needs_configuration' | 'ready' | 'no_new_transactions';
 
 export interface ImportAccountAssignment {
 	sourceAccountKey: string | null;
@@ -44,13 +45,14 @@ export interface ImportPreview {
 	adapterId: BankId;
 	fileHash: string;
 	configurationHash: string | null;
-	readyToConfirm: boolean;
+	status: ImportPreviewStatus;
 	summary: {
 		parsedRows: number;
 		skippedRows: number;
 		errorCount: number;
 		accountCount: number;
-		duplicateEstimate: number;
+		newRowCount: number | null;
+		duplicateCount: number | null;
 		startDate: string | null;
 		endDate: string | null;
 	};
@@ -80,7 +82,7 @@ export interface ImportAccountReport {
 	duplicateCount: number;
 	unknownCount: number;
 	balanceMode: ImportBalanceMode;
-	reportedBalanceCents: number;
+	reportedBalanceCents: number | null;
 	calculatedBalanceCents: number | null;
 }
 

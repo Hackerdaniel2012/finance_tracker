@@ -30,13 +30,14 @@ function parseAssignment(value: unknown, index: number): ImportAccountAssignment
 	}
 
 	const balanceMode = body.balanceMode;
-	if (balanceMode !== 'reported' && balanceMode !== 'complete_history') {
+	if (
+		balanceMode !== 'reported' &&
+		balanceMode !== 'complete_history' &&
+		balanceMode !== 'continue_from_snapshot'
+	) {
 		throw new ValidationError(`assignments[${index}].balanceMode is invalid`);
 	}
-	if (
-		Object.hasOwn(body, 'reportedBalanceCents') &&
-		!Number.isInteger(body.reportedBalanceCents)
-	) {
+	if (Object.hasOwn(body, 'reportedBalanceCents') && !Number.isInteger(body.reportedBalanceCents)) {
 		throw new ValidationError(`assignments[${index}].reportedBalanceCents must be an integer`);
 	}
 	if (balanceMode === 'reported' && !Number.isInteger(body.reportedBalanceCents)) {
@@ -53,6 +54,9 @@ function parseAssignment(value: unknown, index: number): ImportAccountAssignment
 		}
 		result.targetAccountId = body.targetAccountId.trim();
 	} else {
+		if (balanceMode === 'continue_from_snapshot') {
+			throw new ValidationError(`assignments[${index}].balanceMode requires an existing account`);
+		}
 		const newAccount = asObject(body.newAccount, `assignments[${index}].newAccount`);
 		if (typeof newAccount.name !== 'string' || newAccount.name.trim() === '') {
 			throw new ValidationError(`assignments[${index}].newAccount.name is required`);
