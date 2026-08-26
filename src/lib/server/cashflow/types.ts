@@ -1,10 +1,19 @@
 import type { UpcomingIncome, UpcomingPayment } from '../../cashflow';
-export type { MonthCashflowReport, UpcomingIncome, UpcomingPayment } from '../../cashflow';
+export type {
+	CategoryCostProjectionReport,
+	MonthCashflowReport,
+	UpcomingIncome,
+	UpcomingPayment
+} from '../../cashflow';
 export interface CashflowWindow {
 	asOf: string;
 	monthEnd: string;
 	nextIncomeDate: string | null;
 	accountId?: string;
+}
+
+export interface CategoryCostProjectionOptions extends CashflowWindow {
+	categoryIds: string[];
 }
 export interface BalanceBeforeIncomeProjection {
 	asOf: string;

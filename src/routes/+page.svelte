@@ -1,6 +1,10 @@
 <script lang="ts">
 	import * as m from '$lib/paraglide/messages';
-	import type { MonthCashflowReport, UpcomingIncome } from '$lib/cashflow';
+	import type {
+		CategoryCostProjectionReport,
+		MonthCashflowReport,
+		UpcomingIncome
+	} from '$lib/cashflow';
 	import { buildAccountScopeOptions, buildAccountScopeQuery } from '$lib/account-scope';
 	import { BarChart, LineChart } from 'layerchart/svg';
 	import { onMount } from 'svelte';
@@ -15,6 +19,13 @@
 		institution: string | null;
 		balanceCents: number | null;
 		balanceInitialized: boolean;
+	}
+
+	interface DashboardCategory {
+		id: string;
+		name: string;
+		type: string;
+		color: string | null;
 	}
 
 	interface SummaryReport {
@@ -85,15 +96,23 @@
 	}
 
 	let accounts = $state<AccountWithBalance[]>([]);
+	let projectionCategories = $state<DashboardCategory[]>([]);
 	let summary = $state<SummaryReport | null>(null);
 	let netWorth = $state<NetWorthReport | null>(null);
 	let monthCashflow = $state<MonthCashflowReport | null>(null);
 	let projection = $state<BalanceProjection | null>(null);
+	let categoryProjection = $state<CategoryCostProjectionReport | null>(null);
+	let selectedProjectionCategoryIds = $state<string[]>([]);
+	let isCategoryProjectionExpanded = $state(false);
+	let isCategoryProjectionLoading = $state(false);
+	let categoryProjectionError = $state<string | null>(null);
 	let isDashboardLoading = $state(true);
 	let dashboardError = $state<string | null>(null);
 	let dashboardAccountScope = $state('');
 	let includeLiabilitiesInNetWorth = $state(false);
 	let prefersReducedMotion = $state(false);
+	let categoryProjectionRequestId = 0;
+	const categoryProjectionStorageKey = 'finance-tracker.category-projection.selection.v1';
 
 	const netWorthChartTween = { type: 'tween', duration: 450 } as const;
 	const netWorthChartMotion = $derived(
@@ -148,6 +167,19 @@
 			)
 		)
 	);
+	const categoryProjectionChartData = $derived(
+		categoryProjection?.categories.map((category) => ({
+			category: category.categoryName,
+			actual: category.actualCents / 100,
+			remaining: category.projectedRemainingCents / 100
+		})) ?? []
+	);
+	const categoryProjectionXAxisMax = $derived(
+		Math.max(
+			1,
+			...(categoryProjection?.categories.map((category) => category.projectedCents / 100) ?? [])
+		)
+	);
 
 	onMount(() => {
 		void loadHomeState();
@@ -166,8 +198,9 @@
 	});
 
 	async function loadHomeState() {
-		await loadAccounts();
+		const [, categoriesLoaded] = await Promise.all([loadAccounts(), loadProjectionCategories()]);
 		await loadDashboard();
+		if (categoriesLoaded) await loadCategoryProjection();
 	}
 
 	async function loadAccounts() {
@@ -176,6 +209,26 @@
 			accounts = payload.accounts;
 		} catch {
 			accounts = [];
+		}
+	}
+
+	async function loadProjectionCategories() {
+		try {
+			const payload = await fetchJson<{ categories: DashboardCategory[] }>('/api/categories');
+			projectionCategories = payload.categories.filter(
+				(category) => category.type === 'expense' || category.type === 'unknown'
+			);
+			const availableIds = new Set(projectionCategories.map((category) => category.id));
+			selectedProjectionCategoryIds = readStoredProjectionCategories().filter((categoryId) =>
+				availableIds.has(categoryId)
+			);
+			storeProjectionCategories();
+			return true;
+		} catch {
+			projectionCategories = [];
+			selectedProjectionCategoryIds = [];
+			categoryProjectionError = m.category_projection_load_error();
+			return false;
 		}
 	}
 
@@ -205,6 +258,72 @@
 		}
 	}
 
+	async function loadCategoryProjection() {
+		const requestId = ++categoryProjectionRequestId;
+		categoryProjectionError = null;
+		if (selectedProjectionCategoryIds.length === 0) {
+			categoryProjection = null;
+			isCategoryProjectionLoading = false;
+			return;
+		}
+
+		isCategoryProjectionLoading = true;
+		const params = new URLSearchParams();
+		for (const categoryId of selectedProjectionCategoryIds) {
+			params.append('categoryId', categoryId);
+		}
+		if (dashboardAccountScope) params.set('accountId', dashboardAccountScope);
+
+		try {
+			const payload = await fetchJson<{ projection: CategoryCostProjectionReport }>(
+				`/api/category-cost-projection?${params.toString()}`
+			);
+			if (requestId === categoryProjectionRequestId) categoryProjection = payload.projection;
+		} catch {
+			if (requestId === categoryProjectionRequestId) {
+				categoryProjectionError = m.category_projection_load_error();
+			}
+		} finally {
+			if (requestId === categoryProjectionRequestId) isCategoryProjectionLoading = false;
+		}
+	}
+
+	function toggleProjectionCategory(categoryId: string) {
+		selectedProjectionCategoryIds = selectedProjectionCategoryIds.includes(categoryId)
+			? selectedProjectionCategoryIds.filter((selectedId) => selectedId !== categoryId)
+			: [...selectedProjectionCategoryIds, categoryId];
+		storeProjectionCategories();
+		void loadCategoryProjection();
+	}
+
+	function clearProjectionCategories() {
+		selectedProjectionCategoryIds = [];
+		storeProjectionCategories();
+		void loadCategoryProjection();
+	}
+
+	function readStoredProjectionCategories(): string[] {
+		try {
+			const value = JSON.parse(localStorage.getItem(categoryProjectionStorageKey) ?? '[]');
+			return Array.isArray(value)
+				? value.filter((item): item is string => typeof item === 'string')
+				: [];
+		} catch {
+			return [];
+		}
+	}
+
+	function storeProjectionCategories() {
+		localStorage.setItem(
+			categoryProjectionStorageKey,
+			JSON.stringify(selectedProjectionCategoryIds)
+		);
+	}
+
+	function handleDashboardScopeChange() {
+		void Promise.all([loadDashboard(), loadCategoryProjection()]);
+	}
+
 	async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
 		return fetchJsonWithRetry<T>(url, init);
 	}
@@ -225,6 +344,13 @@
 		return new Date(`${value}T00:00:00`).toLocaleDateString(undefined, {
 			month: 'short',
 			day: 'numeric'
+		});
+	}
+
+	function formatMonth(value: string): string {
+		return new Date(`${value}-01T00:00:00`).toLocaleDateString(undefined, {
+			month: 'long',
+			year: 'numeric'
 		});
 	}
 </script>
@@ -251,7 +377,7 @@
 							...buildAccountScopeOptions(accounts)
 						]}
 						bind:value={dashboardAccountScope}
-						onchange={() => loadDashboard()}
+						onchange={handleDashboardScopeChange}
 					/>
 				</div>
 			</article>
@@ -374,6 +500,249 @@
 					</div>
 				{/if}
 			</div>
+		</section>
+
+		<section
+			class="rounded-ui border border-zinc-200 bg-white"
+			aria-busy={isCategoryProjectionLoading}
+		>
+			<button
+				type="button"
+				class="flex w-full items-center justify-between gap-4 rounded-ui p-5 text-left transition hover:bg-zinc-50 focus:outline-2 focus:outline-offset-2 focus:outline-blue-500/20"
+				aria-expanded={isCategoryProjectionExpanded}
+				aria-controls="category-cost-projection-details"
+				aria-label={isCategoryProjectionExpanded
+					? m.category_projection_collapse()
+					: m.category_projection_expand()}
+				onclick={() => (isCategoryProjectionExpanded = !isCategoryProjectionExpanded)}
+			>
+				<span>
+					<span class="block text-sm font-medium text-zinc-500">
+						{m.category_cost_projection()}
+					</span>
+					{#if isCategoryProjectionLoading}
+						<Skeleton class="mt-2 h-8 w-36" />
+					{:else}
+						<span class="mt-2 block text-2xl font-semibold text-zinc-950">
+							{selectedProjectionCategoryIds.length > 0 && categoryProjection
+								? centsToEuros(categoryProjection.totals.projectedCents)
+								: '—'}
+						</span>
+					{/if}
+					<span class="mt-1 block text-xs text-zinc-500">
+						{#if selectedProjectionCategoryIds.length === 0}
+							{m.category_projection_select_prompt()}
+						{:else}
+							{formatMonth(
+								categoryProjection?.range.from.slice(0, 7) ??
+									summary?.range.to.slice(0, 7) ??
+									new Date().toISOString().slice(0, 7)
+							)} / {m.category_projection_selected_count({
+								count: selectedProjectionCategoryIds.length
+							})}
+						{/if}
+					</span>
+				</span>
+				<svg
+					class={`size-6 shrink-0 text-zinc-500 transition-transform ${isCategoryProjectionExpanded ? 'rotate-180' : ''}`}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+				>
+					<path d="m6 9 6 6 6-6" />
+				</svg>
+			</button>
+
+			{#if isCategoryProjectionExpanded}
+				<div id="category-cost-projection-details" class="border-t border-zinc-200 p-5">
+					<fieldset>
+						<legend class="text-sm font-semibold text-zinc-700">
+							{m.category_projection_select_prompt()}
+						</legend>
+						<div class="mt-2 flex justify-end">
+							<button
+								type="button"
+								class="text-sm font-medium text-blue-700 hover:text-blue-900 disabled:cursor-not-allowed disabled:text-zinc-400"
+								disabled={selectedProjectionCategoryIds.length === 0}
+								onclick={clearProjectionCategories}
+							>
+								{m.category_projection_clear()}
+							</button>
+						</div>
+						<div class="mt-3 flex flex-wrap gap-2">
+							{#each projectionCategories as category (category.id)}
+								<label
+									class={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition ${selectedProjectionCategoryIds.includes(category.id) ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50'}`}
+								>
+									<input
+										class="rounded border-zinc-300 text-blue-700 focus:ring-blue-500"
+										type="checkbox"
+										checked={selectedProjectionCategoryIds.includes(category.id)}
+										onchange={() => toggleProjectionCategory(category.id)}
+									/>
+									<span
+										class="size-2 rounded-full"
+										style={`background-color: ${category.color ?? '#71717a'}`}
+										aria-hidden="true"
+									></span>
+									{category.name}
+								</label>
+							{/each}
+						</div>
+					</fieldset>
+
+					{#if categoryProjectionError}
+						<div class="mt-5">
+							<ErrorAlert
+								message={categoryProjectionError}
+								retry={loadCategoryProjection}
+								retryLabel={m.retry()}
+							/>
+						</div>
+					{:else if isCategoryProjectionLoading}
+						<div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+							{#each Array(4) as _}
+								<Skeleton class="h-20 w-full" rounded="rounded-ui" />
+							{/each}
+						</div>
+						<Skeleton class="mt-5 h-72 w-full" rounded="rounded-ui" />
+					{:else if selectedProjectionCategoryIds.length === 0}
+						<p
+							class="mt-5 rounded-ui border border-dashed border-zinc-300 p-6 text-sm text-zinc-500"
+						>
+							{m.category_projection_empty()}
+						</p>
+					{:else if categoryProjection}
+						<div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+							<div class="rounded-ui bg-zinc-50 p-3">
+								<p class="text-xs font-medium text-zinc-500">{m.category_projection_actual()}</p>
+								<p class="mt-1 font-semibold text-zinc-950">
+									{centsToEuros(categoryProjection.totals.actualCents)}
+								</p>
+							</div>
+							<div class="rounded-ui bg-zinc-50 p-3">
+								<p class="text-xs font-medium text-zinc-500">
+									{m.category_projection_historical_average()}
+								</p>
+								<p class="mt-1 font-semibold text-zinc-950">
+									{centsToEuros(categoryProjection.totals.historicalAverageCents)}
+								</p>
+							</div>
+							<div class="rounded-ui bg-zinc-50 p-3">
+								<p class="text-xs font-medium text-zinc-500">
+									{m.category_projection_planned_remaining()}
+								</p>
+								<p class="mt-1 font-semibold text-zinc-950">
+									{centsToEuros(categoryProjection.totals.plannedRemainingCents)}
+								</p>
+							</div>
+							<div class="rounded-ui bg-emerald-50 p-3">
+								<p class="text-xs font-medium text-emerald-700">
+									{m.category_projection_month_total()}
+								</p>
+								<p class="mt-1 font-semibold text-emerald-800">
+									{centsToEuros(categoryProjection.totals.projectedCents)}
+								</p>
+							</div>
+						</div>
+						<p class="mt-3 text-xs text-zinc-500">
+							{m.category_projection_history_basis({
+								months: categoryProjection.range.historyMonths.map(formatMonth).join(' – ')
+							})}
+						</p>
+
+						<div class="mt-5 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(30rem,0.9fr)]">
+							<div class="min-w-0 rounded-ui bg-zinc-50 p-3">
+								<div class="flex flex-wrap gap-4 px-2 text-xs text-zinc-600">
+									<span class="flex items-center gap-2">
+										<span class="size-3 rounded-sm bg-emerald-700" aria-hidden="true"></span>
+										{m.category_projection_actual()}
+									</span>
+									<span class="flex items-center gap-2">
+										<span class="size-3 rounded-sm bg-blue-300" aria-hidden="true"></span>
+										{m.category_projection_projected_remaining()}
+									</span>
+								</div>
+								<div
+									class="category-projection-chart mt-3 min-h-64 p-4"
+									style={`height: ${Math.max(260, categoryProjectionChartData.length * 56)}px`}
+								>
+									<BarChart
+										data={categoryProjectionChartData}
+										orientation="horizontal"
+										x="actual"
+										y="category"
+										xDomain={[0, categoryProjectionXAxisMax]}
+										padding={{ left: 120 }}
+										axis
+										grid
+										seriesLayout="stack"
+										series={[
+											{ key: 'actual', value: 'actual', color: '#047857' },
+											{ key: 'remaining', value: 'remaining', color: '#93c5fd' }
+										]}
+										class="h-full w-full"
+									/>
+								</div>
+							</div>
+
+							<div class="min-w-0 overflow-x-auto rounded-ui border border-zinc-200">
+								<table class="w-full min-w-[42rem] text-left text-sm">
+									<thead class="bg-zinc-50 text-xs font-semibold text-zinc-600">
+										<tr>
+											<th class="px-3 py-3" scope="col">{m.category()}</th>
+											<th class="px-3 py-3 text-right" scope="col">
+												{m.category_projection_actual()}
+											</th>
+											<th class="px-3 py-3 text-right" scope="col">
+												{m.category_projection_historical_average()}
+											</th>
+											<th class="px-3 py-3 text-right" scope="col">
+												{m.category_projection_planned_remaining()}
+											</th>
+											<th class="px-3 py-3 text-right" scope="col">
+												{m.category_projection_month_total()}
+											</th>
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-zinc-200">
+										{#each categoryProjection.categories as category (category.categoryId)}
+											<tr>
+												<th class="px-3 py-3 font-medium text-zinc-950" scope="row">
+													<span class="flex items-center gap-2">
+														<span
+															class="size-2 rounded-full"
+															style={`background-color: ${category.categoryColor ?? '#71717a'}`}
+															aria-hidden="true"
+														></span>
+														{category.categoryName}
+													</span>
+												</th>
+												<td class="px-3 py-3 text-right text-zinc-700">
+													{centsToEuros(category.actualCents)}
+												</td>
+												<td class="px-3 py-3 text-right text-zinc-700">
+													{centsToEuros(category.historicalAverageCents)}
+												</td>
+												<td class="px-3 py-3 text-right text-zinc-700">
+													{centsToEuros(category.plannedRemainingCents)}
+												</td>
+												<td class="px-3 py-3 text-right font-semibold text-zinc-950">
+													{centsToEuros(category.projectedCents)}
+												</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					{/if}
+				</div>
+			{/if}
 		</section>
 
 		<section class="rounded-ui border border-zinc-200 bg-white p-5" aria-busy={isDashboardLoading}>
@@ -557,6 +926,11 @@
 
 <style>
 	:global(.expense-category-chart .lc-axis-tick-label) {
+		font-size: 12px !important;
+		font-weight: 500 !important;
+	}
+
+	:global(.category-projection-chart .lc-axis-tick-label) {
 		font-size: 12px !important;
 		font-weight: 500 !important;
 	}

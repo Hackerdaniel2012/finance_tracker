@@ -1,11 +1,12 @@
 import { ValidationError } from '../accounts/errors';
-import type { CashflowWindow } from './types';
+import type { CashflowWindow, CategoryCostProjectionOptions } from './types';
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseCashflowWindow(url: URL, today = new Date()): CashflowWindow {
 	const asOf = optionalDate(url.searchParams.get('asOf'), 'asOf') ?? toIsoDate(today);
-	const nextIncomeDate = optionalDate(url.searchParams.get('nextIncomeDate'), 'nextIncomeDate') ?? null;
+	const nextIncomeDate =
+		optionalDate(url.searchParams.get('nextIncomeDate'), 'nextIncomeDate') ?? null;
 	const accountId = optionalQueryString(url, 'accountId');
 
 	if (nextIncomeDate !== null && nextIncomeDate <= asOf) {
@@ -17,6 +18,23 @@ export function parseCashflowWindow(url: URL, today = new Date()): CashflowWindo
 		monthEnd: endOfMonth(asOf),
 		nextIncomeDate,
 		accountId
+	};
+}
+
+export function parseCategoryCostProjectionOptions(
+	url: URL,
+	today = new Date()
+): CategoryCostProjectionOptions {
+	return {
+		...parseCashflowWindow(url, today),
+		categoryIds: [
+			...new Set(
+				url.searchParams
+					.getAll('categoryId')
+					.map((categoryId) => categoryId.trim())
+					.filter(Boolean)
+			)
+		]
 	};
 }
 
