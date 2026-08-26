@@ -34,14 +34,26 @@ describe('import-anchored account balances', () => {
 		const secondCsv = dkbCsv([
 			'"10.07.26";"10.07.26";"Gebucht";"Me";"Second";"Later same day";"Ausgang";"DE";"2,00";"";"";"second"'
 		]);
-		const preview = await previewExisting(account.id, secondCsv, 9800);
+		const preview = await previewExisting(account.id, secondCsv);
 		expect(preview.accounts[0]).toMatchObject({
 			calculatedBalanceCents: 9800,
-			differenceCents: 0,
+			differenceCents: null,
 			balanceMatches: true
 		});
 		const second = await confirm(account.id, secondCsv, 9800);
 		expect(await balance(account.id)).toBe(9800);
+		expect(second.accounts[0]).toMatchObject({
+			balanceMode: 'anchored',
+			reportedBalanceCents: null,
+			calculatedBalanceCents: 9800
+		});
+		expect(
+			sqlite.exec(
+				`SELECT reported_balance_cents, calculated_balance_cents
+				FROM import_batches WHERE id = '${second.batchId}'`
+			)[0]?.values
+		).toEqual([[null, 9800]]);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM account_balance_snapshots')).toBe(1);
 
 		await expect(deleteImportRun(db, first.runId)).rejects.toThrow(
 			'Newer imports must be deleted first'
@@ -53,7 +65,7 @@ describe('import-anchored account balances', () => {
 		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM account_balance_snapshots')).toBe(0);
 	});
 
-	it('ignores newly imported history before the anchor and rejects balance drift atomically', async () => {
+	it('ignores newly imported history before the anchor and advances later rows automatically', async () => {
 		const account = await createAccount(db, { name: 'Checking' });
 		const firstCsv = dkbCsv([
 			'"10.07.26";"10.07.26";"Gebucht";"Me";"First";"Initial";"Ausgang";"DE";"5,00";"";"";"first"'
@@ -63,7 +75,7 @@ describe('import-anchored account balances', () => {
 		const historicalCsv = dkbCsv([
 			'"09.07.26";"09.07.26";"Gebucht";"Me";"Old";"History";"Ausgang";"DE";"3,00";"";"";"old"'
 		]);
-		const preview = await previewExisting(account.id, historicalCsv, 10000);
+		const preview = await previewExisting(account.id, historicalCsv);
 		expect(preview.accounts[0].calculatedBalanceCents).toBe(10000);
 		await confirm(account.id, historicalCsv, 10000);
 		expect(await balance(account.id)).toBe(10000);
@@ -71,25 +83,29 @@ describe('import-anchored account balances', () => {
 		const newCsv = dkbCsv([
 			'"11.07.26";"11.07.26";"Gebucht";"Me";"New";"New";"Ausgang";"DE";"1,00";"";"";"new"'
 		]);
-		const batchCount = firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches');
-		await expect(confirm(account.id, newCsv, 9999)).rejects.toThrow(
-			'Reported balance does not match the calculated balance'
-		);
-		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches')).toBe(batchCount);
-		expect(await balance(account.id)).toBe(10000);
+		const batchCount = firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches') ?? 0;
+		await confirm(account.id, newCsv, 9999);
+		expect(firstValue<number>(sqlite, 'SELECT COUNT(*) FROM import_batches')).toBe(batchCount + 1);
+		expect(await balance(account.id)).toBe(9900);
 	});
 
 	it('does not count same-day candidates after a manual snapshot', async () => {
 		const account = await createAccount(db, { name: 'Manual anchor' });
-		await db.prepare(
-			`INSERT INTO account_balance_snapshots (id, account_id, snapshot_date, balance_cents, source)
+		await db
+			.prepare(
+				`INSERT INTO account_balance_snapshots (id, account_id, snapshot_date, balance_cents, source)
 			VALUES ('manual', ?, '2026-07-10', 10000, 'manual')`
-		).bind(account.id).run();
+			)
+			.bind(account.id)
+			.run();
 		const csv = dkbCsv([
 			'"10.07.26";"10.07.26";"Gebucht";"Me";"Same day";"Same day";"Ausgang";"DE";"2,00";"";"";"manual-same-day"'
 		]);
-		const preview = await previewExisting(account.id, csv, 10000);
-		expect(preview.accounts[0]).toMatchObject({ calculatedBalanceCents: 10000, differenceCents: 0 });
+		const preview = await previewExisting(account.id, csv);
+		expect(preview.accounts[0]).toMatchObject({
+			calculatedBalanceCents: 10000,
+			differenceCents: null
+		});
 	});
 });
 
@@ -103,17 +119,18 @@ async function confirm(accountId: string, csv: string, reportedBalanceCents: num
 	});
 }
 
-async function previewExisting(accountId: string, csv: string, reportedBalanceCents: number) {
+async function previewExisting(accountId: string, csv: string) {
 	const discovered = await previewImport(db, { adapterId: 'dkb_girocard', csv });
 	return previewImport(db, {
 		adapterId: 'dkb_girocard',
 		csv,
-		assignments: [{
-			sourceAccountKey: discovered.accounts[0].sourceAccountKey,
-			targetAccountId: accountId,
-			balanceMode: 'reported',
-			reportedBalanceCents
-		}]
+		assignments: [
+			{
+				sourceAccountKey: discovered.accounts[0].sourceAccountKey,
+				targetAccountId: accountId,
+				balanceMode: 'anchored'
+			}
+		]
 	});
 }
 

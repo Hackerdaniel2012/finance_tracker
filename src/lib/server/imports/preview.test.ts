@@ -7,6 +7,7 @@ import {
 import { createAccount } from '../accounts/repository';
 import type { DbClient } from '../db-client';
 import { previewImport } from './preview';
+import { importIntoExistingAccount } from './test-support';
 
 let db: DbClient;
 
@@ -50,6 +51,76 @@ describe('previewImport', () => {
 				}))
 			})
 		).rejects.toThrow('different target account');
+	});
+
+	it('requires an existing balance anchor for anchored calculation', async () => {
+		const account = await createAccount(db, { name: 'Uninitialized account' });
+		const csv = n26Csv().split('\n').slice(0, 2).join('\n');
+		const discovered = await previewImport(db, { adapterId: 'n26', csv });
+
+		await expect(
+			previewImport(db, {
+				adapterId: 'n26',
+				csv,
+				assignments: [
+					{
+						sourceAccountKey: discovered.accounts[0].sourceAccountKey,
+						targetAccountId: account.id,
+						balanceMode: 'anchored'
+					}
+				]
+			})
+		).rejects.toThrow('requires an initialized account');
+	});
+
+	it('still requires a reported balance when no anchor exists', async () => {
+		const account = await createAccount(db, { name: 'Uninitialized account' });
+		const csv = n26Csv().split('\n').slice(0, 2).join('\n');
+		const discovered = await previewImport(db, { adapterId: 'n26', csv });
+
+		await expect(
+			previewImport(db, {
+				adapterId: 'n26',
+				csv,
+				assignments: [
+					{
+						sourceAccountKey: discovered.accounts[0].sourceAccountKey,
+						targetAccountId: account.id,
+						balanceMode: 'reported'
+					}
+				]
+			})
+		).rejects.toThrow('reportedBalanceCents is required');
+	});
+
+	it('returns only rows that would actually be imported after duplicate checking', async () => {
+		const account = await createAccount(db, { name: 'Existing account' });
+		const [header, existingRow, newRow] = n26Csv().split('\n');
+		await importIntoExistingAccount(db, {
+			accountId: account.id,
+			adapterId: 'n26',
+			csv: [header, existingRow].join('\n'),
+			reportedBalanceCents: 100_000
+		});
+		const csv = [header, existingRow, newRow].join('\n');
+		const discovered = await previewImport(db, { adapterId: 'n26', csv });
+		expect(discovered.accounts[0].importableRows).toEqual([]);
+
+		const checked = await previewImport(db, {
+			adapterId: 'n26',
+			csv,
+			assignments: [
+				{
+					sourceAccountKey: 'Main',
+					targetAccountId: account.id,
+					balanceMode: 'anchored'
+				}
+			]
+		});
+
+		expect(checked.accounts[0].importableRowCount).toBe(1);
+		expect(checked.accounts[0].duplicateRows).toHaveLength(1);
+		expect(checked.accounts[0].importableRows).toMatchObject([{ payee: 'Shop' }]);
 	});
 });
 

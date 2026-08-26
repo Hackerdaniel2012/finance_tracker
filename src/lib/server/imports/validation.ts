@@ -30,17 +30,23 @@ function parseAssignment(value: unknown, index: number): ImportAccountAssignment
 	}
 
 	const balanceMode = body.balanceMode;
-	if (balanceMode !== 'reported' && balanceMode !== 'complete_history') {
+	if (
+		balanceMode !== 'reported' &&
+		balanceMode !== 'complete_history' &&
+		balanceMode !== 'anchored'
+	) {
 		throw new ValidationError(`assignments[${index}].balanceMode is invalid`);
 	}
-	if (
-		Object.hasOwn(body, 'reportedBalanceCents') &&
-		!Number.isInteger(body.reportedBalanceCents)
-	) {
+	if (Object.hasOwn(body, 'reportedBalanceCents') && !Number.isInteger(body.reportedBalanceCents)) {
 		throw new ValidationError(`assignments[${index}].reportedBalanceCents must be an integer`);
 	}
 	if (balanceMode === 'reported' && !Number.isInteger(body.reportedBalanceCents)) {
 		throw new ValidationError(`assignments[${index}].reportedBalanceCents is required`);
+	}
+	if (balanceMode !== 'reported' && Object.hasOwn(body, 'reportedBalanceCents')) {
+		throw new ValidationError(
+			`assignments[${index}].reportedBalanceCents is only valid for reported balances`
+		);
 	}
 
 	const result: ImportAccountAssignment = { sourceAccountKey, balanceMode };

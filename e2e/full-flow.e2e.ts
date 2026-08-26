@@ -55,7 +55,7 @@ test('creates an account, imports a fixture, reviews an unknown transaction, and
 	await page.getByRole('option', { name: accountName, exact: true }).click();
 	await accountGroup.getByLabel(/entered balance|eingegebener kontostand/i).fill('1000.00');
 	await page
-		.getByRole('button', { name: /validate account setup|kontoeinrichtung prüfen/i })
+		.getByRole('button', { name: /check rows and duplicates|zeilen und duplikate prüfen/i })
 		.click();
 	await expect(page.getByText(/Example Market/i).first()).toBeVisible();
 

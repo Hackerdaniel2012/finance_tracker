@@ -9,7 +9,7 @@
 	import { onMount } from 'svelte';
 
 	type BankId = 'n26' | 'trade_republic' | 'dkb_girocard' | 'dkb_creditcard';
-	type BalanceMode = 'reported' | 'complete_history';
+	type BalanceMode = 'reported' | 'complete_history' | 'anchored';
 	interface Account {
 		id: string;
 		name: string;
@@ -37,7 +37,7 @@
 		rowCount: number;
 		startDate: string | null;
 		endDate: string | null;
-		sampleRows: TransactionRow[];
+		importableRows: TransactionRow[];
 		targetAccountName: string | null;
 		targetBalanceInitialized: boolean;
 		importableRowCount: number | null;
@@ -125,6 +125,9 @@
 			preview.accounts.some((group) => (group.importableRowCount ?? 0) > 0) &&
 			!isConfirming
 	);
+	const importableRowCount = $derived(
+		preview?.accounts.reduce((sum, group) => sum + (group.importableRowCount ?? 0), 0) ?? 0
+	);
 
 	onMount(() => void Promise.all([loadSetup(), loadHistory()]));
 
@@ -178,10 +181,11 @@
 		// Picker updates its bindable value before the parent binding propagates.
 		// Normalize on the next microtask so this reads the newly selected target.
 		queueMicrotask(() => {
-			if (
-				assignment.targetKind === 'existing' &&
-				accountIsInitialized(assignment.targetAccountId)
-			) {
+			const targetIsInitialized =
+				assignment.targetKind === 'existing' && accountIsInitialized(assignment.targetAccountId);
+			if (targetIsInitialized) {
+				assignment.balanceMode = 'anchored';
+			} else if (assignment.balanceMode === 'anchored') {
 				assignment.balanceMode = 'reported';
 			}
 			invalidateConfiguration();
@@ -195,13 +199,17 @@
 		previewError = null;
 		report = null;
 		try {
-			preview = (
+			const discoveredPreview = (
 				await fetchJson<{ preview: ImportPreview }>('/api/imports/preview', {
 					method: 'POST',
 					body: buildFormData()
 				})
 			).preview;
-			assignments = preview.accounts.map((group) => initialAssignment(group));
+			preview = discoveredPreview;
+			assignments = discoveredPreview.accounts.map((group) => initialAssignment(group));
+			if (assignments.every(assignmentIsComplete)) {
+				await validateConfiguration();
+			}
 		} catch {
 			previewError = m.import_preview_error();
 		} finally {
@@ -223,7 +231,7 @@
 				})
 			).preview;
 		} catch {
-			previewError = m.import_configuration_error();
+			previewError = m.import_check_error();
 		} finally {
 			isValidating = false;
 		}
@@ -278,7 +286,7 @@
 			targetAccountId: suggested?.id ?? accounts[0]?.id ?? '',
 			name: group.suggestedName,
 			institution: schemeLabel(preview!.adapterId),
-			balanceMode: 'reported',
+			balanceMode: suggested?.balanceInitialized ? 'anchored' : 'reported',
 			reportedBalance: ''
 		};
 	}
@@ -287,6 +295,7 @@
 		if (assignment.targetKind === 'existing' && !assignment.targetAccountId) return false;
 		if (assignment.targetKind === 'new' && !assignment.name.trim()) return false;
 		return (
+			assignment.balanceMode === 'anchored' ||
 			assignment.balanceMode === 'complete_history' ||
 			eurosToCents(assignment.reportedBalance) !== null
 		);
@@ -408,7 +417,7 @@
 							type="button"
 							disabled={!canValidate}
 							onclick={validateConfiguration}
-							>{#if isValidating}<ButtonSpinner />{/if}{m.validate_account_setup()}</button
+							>{#if isValidating}<ButtonSpinner />{/if}{m.check_import_rows()}</button
 						>
 						<button
 							class="flex h-11 items-center gap-2 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
@@ -429,7 +438,7 @@
 					{#each Array(2) as _}<Skeleton class="h-72 w-full" rounded="rounded-ui" />{/each}
 				</div>
 			{:else if preview}
-				<div class="mt-5 grid gap-3 sm:grid-cols-4">
+				<div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
 					<article class="rounded-ui border border-zinc-200 p-4">
 						<p class="text-sm text-zinc-500">{m.detected_accounts()}</p>
 						<p class="mt-1 text-2xl font-semibold">{preview.summary.accountCount}</p>
@@ -438,9 +447,23 @@
 						<p class="text-sm text-zinc-500">{m.parsed_rows()}</p>
 						<p class="mt-1 text-2xl font-semibold">{preview.summary.parsedRows}</p>
 					</article>
-					<article class="rounded-ui border border-zinc-200 p-4">
-						<p class="text-sm text-zinc-500">{m.duplicate_estimate()}</p>
-						<p class="mt-1 text-2xl font-semibold">{preview.summary.duplicateEstimate}</p>
+					<article class="rounded-ui border border-zinc-200 p-4" data-testid="importable-row-count">
+						<p class="text-sm text-zinc-500">{m.rows_to_import()}</p>
+						<p class="mt-1 text-2xl font-semibold">
+							{preview.readyToConfirm ? importableRowCount : '—'}
+						</p>
+						{#if !preview.readyToConfirm}<p class="mt-1 text-xs text-zinc-500">
+								{m.row_counts_pending()}
+							</p>{/if}
+					</article>
+					<article class="rounded-ui border border-zinc-200 p-4" data-testid="duplicate-row-count">
+						<p class="text-sm text-zinc-500">{m.duplicate_rows()}</p>
+						<p class="mt-1 text-2xl font-semibold">
+							{preview.readyToConfirm ? preview.summary.duplicateEstimate : '—'}
+						</p>
+						{#if !preview.readyToConfirm}<p class="mt-1 text-xs text-zinc-500">
+								{m.row_counts_pending()}
+							</p>{/if}
 					</article>
 					<article class="rounded-ui border border-zinc-200 p-4">
 						<p class="text-sm text-zinc-500">{m.date_range()}</p>
@@ -449,6 +472,7 @@
 						</p>
 					</article>
 				</div>
+				<p class="mt-3 text-sm leading-6 text-zinc-600">{m.import_check_description()}</p>
 
 				<div class="mt-5 grid gap-5">
 					{#each preview.accounts as group, index (`${group.sourceAccountKey ?? 'single'}`)}
@@ -514,20 +538,29 @@
 											/></label
 										>
 									{/if}
-									<div class="grid gap-1 text-sm font-medium text-zinc-700">
-										<span>{m.balance_basis()}</span><Picker
-											ariaLabel={m.balance_basis()}
-											placeholder={m.required()}
-											options={[
-												{ value: 'reported', label: m.enter_current_balance() },
-												{ value: 'complete_history', label: m.complete_history_from_zero() }
-											]}
-											bind:value={assignment.balanceMode}
-											disabled={assignment.targetKind === 'existing' &&
-												accountIsInitialized(assignment.targetAccountId)}
-											onchange={invalidateConfiguration}
-										/>
-									</div>
+									{#if assignment.balanceMode === 'anchored'}
+										<p
+											class="self-end rounded bg-blue-50 p-3 text-sm leading-6 text-blue-800 md:col-span-2"
+										>
+											{m.balance_calculated_from_anchor()}
+										</p>
+									{:else}
+										<div class="grid gap-1 text-sm font-medium text-zinc-700">
+											<span>{m.balance_basis()}</span><Picker
+												ariaLabel={m.balance_basis()}
+												placeholder={m.required()}
+												options={[
+													{ value: 'reported', label: m.enter_current_balance() },
+													{
+														value: 'complete_history',
+														label: m.complete_history_from_zero()
+													}
+												]}
+												bind:value={assignment.balanceMode}
+												onchange={invalidateConfiguration}
+											/>
+										</div>
+									{/if}
 									{#if assignment.balanceMode === 'reported'}
 										<label class="grid gap-1 text-sm font-medium text-zinc-700"
 											><span>{m.entered_balance()}</span><input
@@ -539,30 +572,32 @@
 												required
 											/></label
 										>
-									{:else}<p class="self-end pb-2 text-sm leading-6 text-zinc-600">
+									{:else if assignment.balanceMode === 'complete_history'}<p
+											class="self-end pb-2 text-sm leading-6 text-zinc-600"
+										>
 											{m.complete_history_confirmation()}
 										</p>{/if}
 								</div>
 								{#if preview.readyToConfirm}
 									<div class="mt-4 rounded bg-emerald-50 p-3 text-sm text-emerald-800">
-										{m.account_setup_valid()}
+										{m.import_check_complete()}
 										{#if group.calculatedBalanceCents !== null}{m.calculated_balance()}: {centsToEuros(
 												group.calculatedBalanceCents
 											)}.{/if}
-										{m.imported_rows()}: {group.importableRowCount ?? 0}.
+										{m.rows_to_import()}: {group.importableRowCount ?? 0}.
 									</div>
 								{/if}
 							{/if}
-							{#if group.sampleRows.length > 0}
+							{#if group.importableRows.length > 0}
 								<div class="mt-4 overflow-x-auto">
-									<table class="min-w-full text-left text-sm">
+									<table class="min-w-full text-left text-sm" data-testid="importable-rows">
 										<thead class="text-xs uppercase text-zinc-500"
 											><tr
 												><th class="px-2 py-2">{m.date()}</th><th class="px-2 py-2">{m.payee()}</th
 												><th class="px-2 py-2 text-right">{m.amount()}</th></tr
 											></thead
 										><tbody class="divide-y divide-zinc-100"
-											>{#each group.sampleRows as row (row.dedupeKey)}<tr
+										>{#each group.importableRows as row (row.dedupeKey)}<tr
 													><td class="px-2 py-2">{formatDate(row.bookingDate)}</td><td
 														class="px-2 py-2"
 														>{row.payee || row.description || m.not_available()}</td

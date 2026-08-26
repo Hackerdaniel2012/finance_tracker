@@ -55,9 +55,7 @@ export async function confirmImport(
 			...prepared.preview.summary
 		})
 	);
-	statements.push(
-		createFileClaimStatement(db, runId, prepared.preview.adapterId, fileHash)
-	);
+	statements.push(createFileClaimStatement(db, runId, prepared.preview.adapterId, fileHash));
 
 	for (const [groupIndex, group] of prepared.groups.entries()) {
 		const assignment = group.preview.assignment!;
@@ -82,6 +80,10 @@ export async function confirmImport(
 			assignment,
 			group.preview.calculatedBalanceCents
 		);
+		const resolvedBalanceCents = reportedBalanceCents ?? group.preview.calculatedBalanceCents;
+		if (resolvedBalanceCents === null) {
+			throw new ValidationError('Account balance could not be resolved');
+		}
 		statements.push(
 			createBatchStatement(db, {
 				batchId,
@@ -124,7 +126,7 @@ export async function confirmImport(
 					accountId,
 					batchId,
 					snapshotDate: group.preview.endDate,
-					balanceCents: reportedBalanceCents
+					balanceCents: resolvedBalanceCents
 				})
 			);
 		}
@@ -308,7 +310,7 @@ function createBatchStatement(
 		importedCount: number;
 		duplicateCount: number;
 		errorCount: number;
-		reportedBalanceCents: number;
+		reportedBalanceCents: number | null;
 		calculatedBalanceCents: number | null;
 	}
 ): DbStatement {
@@ -422,7 +424,8 @@ function insertRowErrorStatement(db: DbClient, batchId: string, error: ParseErro
 function getReportedBalance(
 	assignment: ImportAccountAssignment,
 	calculatedBalanceCents: number | null
-): number {
+): number | null {
+	if (assignment.balanceMode === 'anchored') return null;
 	return assignment.balanceMode === 'complete_history'
 		? calculatedBalanceCents!
 		: assignment.reportedBalanceCents!;

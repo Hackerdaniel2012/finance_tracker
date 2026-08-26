@@ -1,9 +1,13 @@
 import { getBankAdapter, type BankId, type NormalizedTransaction } from '$lib/banks';
-import { ConflictError, NotFoundError, ValidationError } from '../accounts/errors';
+import { NotFoundError, ValidationError } from '../accounts/errors';
 import { calculateBalanceAfterCandidates, getLatestBalanceSnapshot } from '../accounts/balance';
 import { getAccount } from '../accounts/repository';
 import type { DbClient, DbRow } from '../db-client';
-import { getExistingTransactionsByDedupeKey, partitionImportRows } from './deduplication';
+import {
+	getDkbSemanticDuplicateCandidates,
+	getExistingTransactionsByDedupeKey,
+	partitionImportRows
+} from './deduplication';
 import { getDateRange, sha256Hex } from './shared';
 import type {
 	ImportAccountAssignment,
@@ -13,7 +17,6 @@ import type {
 } from './types';
 import { parseImportAccountAssignments } from './validation';
 
-const sampleRowLimit = 5;
 const keylessGroup = '\u0000single-account';
 
 export interface PreparedImportGroup {
@@ -45,6 +48,7 @@ export async function prepareImport(
 		preparedGroups.push(
 			await prepareGroup(
 				db,
+				adapter.id,
 				adapter.label,
 				group,
 				assignment,
@@ -86,6 +90,7 @@ export async function prepareImport(
 
 async function prepareGroup(
 	db: DbClient,
+	adapterId: BankId,
 	adapterLabel: string,
 	group: GroupedRows,
 	assignment: ImportAccountAssignment | null,
@@ -100,7 +105,7 @@ async function prepareGroup(
 		suggestedName: group.label || adapterLabel,
 		rowCount: group.rows.length,
 		...range,
-		sampleRows: group.rows.slice(0, sampleRowLimit),
+		importableRows: [],
 		assignment,
 		targetAccountName: null,
 		targetBalanceInitialized: false,
@@ -127,38 +132,59 @@ async function prepareGroup(
 				group.rows.map((row) => row.dedupeKey)
 			)
 		: new Map();
-	const partition = partitionImportRows(group.rows, existing);
+	const semantic =
+		account &&
+		(adapterId === 'dkb_girocard' || adapterId === 'dkb_creditcard') &&
+		range.startDate &&
+		range.endDate
+			? {
+					adapterId,
+					candidates: await getDkbSemanticDuplicateCandidates(
+						db,
+						adapterId,
+						account.id,
+						range.startDate,
+						range.endDate
+					)
+				}
+			: undefined;
+	const partition = partitionImportRows(group.rows, existing, semantic);
 	const snapshot = account ? await getLatestBalanceSnapshot(db, account.id) : null;
-	if (snapshot && assignment.balanceMode !== 'reported') {
-		throw new ValidationError('Initialized accounts require a reported balance');
+	if (snapshot && assignment.balanceMode !== 'anchored') {
+		throw new ValidationError('Initialized accounts require anchored balance calculation');
+	}
+	if (!snapshot && assignment.balanceMode === 'anchored') {
+		throw new ValidationError('Anchored balance calculation requires an initialized account');
 	}
 
 	let calculatedBalanceCents: number | null = null;
-	let reportedBalanceCents: number;
+	let reportedBalanceCents: number | null = null;
 	if (assignment.balanceMode === 'complete_history') {
 		if (!range.endDate) throw new ValidationError('Account group has no valid rows');
 		const existingTotal = account ? await getTransactionTotal(db, account.id, range.endDate) : 0;
 		calculatedBalanceCents =
 			existingTotal + partition.rows.reduce((sum, row) => sum + row.amountCents, 0);
 		reportedBalanceCents = calculatedBalanceCents;
-	} else {
+	} else if (assignment.balanceMode === 'reported') {
 		if (!Number.isInteger(assignment.reportedBalanceCents)) {
 			throw new ValidationError('reportedBalanceCents must be an integer');
 		}
 		reportedBalanceCents = assignment.reportedBalanceCents!;
-		calculatedBalanceCents = snapshot
-			? await calculateBalanceAfterCandidates(db, account!.id, partition.rows)
-			: null;
+	} else {
+		calculatedBalanceCents = await calculateBalanceAfterCandidates(db, account!.id, partition.rows);
+		if (calculatedBalanceCents === null) {
+			throw new ValidationError('Account balance could not be calculated from its anchor');
+		}
 	}
 	const differenceCents =
-		calculatedBalanceCents === null ? null : reportedBalanceCents - calculatedBalanceCents;
-	if (snapshot && differenceCents !== 0) {
-		throw new ConflictError('Reported balance does not match the calculated balance');
-	}
+		calculatedBalanceCents === null || reportedBalanceCents === null
+			? null
+			: reportedBalanceCents - calculatedBalanceCents;
 
 	return {
 		preview: {
 			...base,
+			importableRows: partition.rows,
 			targetAccountName: account?.name ?? assignment.newAccount!.name.trim(),
 			targetBalanceInitialized: snapshot !== null,
 			importableRowCount: partition.rows.length,
@@ -199,7 +225,11 @@ function validateAssignmentSet(
 			targetIds.add(id);
 			assignment = { ...assignment, targetAccountId: id };
 		}
-		if (assignment.balanceMode !== 'reported' && assignment.balanceMode !== 'complete_history') {
+		if (
+			assignment.balanceMode !== 'reported' &&
+			assignment.balanceMode !== 'complete_history' &&
+			assignment.balanceMode !== 'anchored'
+		) {
 			throw new ValidationError('balanceMode is invalid');
 		}
 		result.set(key, assignment);

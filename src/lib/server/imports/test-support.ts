@@ -1,4 +1,5 @@
 import type { BankId } from '$lib/banks';
+import { getLatestBalanceSnapshot } from '../accounts/balance';
 import type { DbClient } from '../db-client';
 import { confirmImport } from './confirm';
 import { previewImport } from './preview';
@@ -16,14 +17,21 @@ export async function importIntoExistingAccount(
 	}
 ) {
 	const discovery = await previewImport(db, { adapterId: input.adapterId, csv: input.csv });
+	const snapshot = await getLatestBalanceSnapshot(db, input.accountId);
 	const assignments = discovery.accounts.map((group, index) =>
 		index === 0
-			? {
-					sourceAccountKey: group.sourceAccountKey,
-					targetAccountId: input.accountId,
-					balanceMode: 'reported' as const,
-					reportedBalanceCents: input.reportedBalanceCents
-				}
+			? snapshot
+				? {
+						sourceAccountKey: group.sourceAccountKey,
+						targetAccountId: input.accountId,
+						balanceMode: 'anchored' as const
+					}
+				: {
+						sourceAccountKey: group.sourceAccountKey,
+						targetAccountId: input.accountId,
+						balanceMode: 'reported' as const,
+						reportedBalanceCents: input.reportedBalanceCents
+					}
 			: {
 					sourceAccountKey: group.sourceAccountKey,
 					newAccount: { name: group.sourceAccountLabel, institution: null },

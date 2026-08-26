@@ -45,8 +45,10 @@ test('creates two real accounts from one multi-account N26 CSV and rolls the run
 	await savingsGroup.getByLabel(/entered balance|eingegebener kontostand/i).fill('-24.00');
 
 	await page
-		.getByRole('button', { name: /validate account setup|kontoeinrichtung prüfen/i })
+		.getByRole('button', { name: /check rows and duplicates|zeilen und duplikate prüfen/i })
 		.click();
+	await expect(page.getByTestId('importable-row-count')).toContainText('4');
+	await expect(page.getByTestId('duplicate-row-count')).toContainText('0');
 	const confirm = page.getByRole('button', { name: /confirm import|import bestätigen/i });
 	await expect(confirm).toBeEnabled();
 	await confirm.click();
@@ -67,7 +69,9 @@ test('creates two real accounts from one multi-account N26 CSV and rolls the run
 	await expect(page.getByRole('heading', { name: savingsName })).toBeVisible();
 });
 
-test('switching to an initialized existing account requires a reported balance', async ({ page }) => {
+test('switching to an initialized existing account uses its anchor automatically', async ({
+	page
+}) => {
 	const suffix = `${Date.now()}`;
 	const accountName = `E2E initialized account ${suffix}`;
 	const uploadForm = () =>
@@ -87,21 +91,29 @@ test('switching to an initialized existing account requires a reported balance',
 			.getByRole('heading', { name: /upload csv|csv hochladen/i })
 			.locator('xpath=ancestor::section[1]')
 	).toHaveAttribute('aria-busy', 'false');
-	await uploadForm().getByRole('button', { name: /csv scheme|csv-schema/i }).click();
+	await uploadForm()
+		.getByRole('button', { name: /csv scheme|csv-schema/i })
+		.click();
 	await page.getByRole('option', { name: /dkb giro card|dkb giro card/i }).click();
 	await uploadForm()
 		.getByLabel(/csv file|csv-datei/i)
 		.setInputFiles(resolve('tests/fixtures/dkb-giro-basic.csv'));
-	await uploadForm().getByRole('button', { name: /detect accounts|konten erkennen/i }).click();
+	await uploadForm()
+		.getByRole('button', { name: /detect accounts|konten erkennen/i })
+		.click();
 	const dkbGroup = page
 		.getByRole('heading', { name: /girokonto|csv account/i })
 		.locator('xpath=ancestor::article[1]');
 	await dkbGroup.getByRole('button', { name: /target account|zielkonto/i }).click();
-	await page.getByRole('option', { name: /use existing account|bestehendes konto verwenden/i }).click();
+	await page
+		.getByRole('option', { name: /use existing account|bestehendes konto verwenden/i })
+		.click();
 	await dkbGroup.getByRole('button', { name: /^account$|^konto$/i }).click();
 	await page.getByRole('option', { name: accountName, exact: true }).click();
 	await dkbGroup.getByLabel(/entered balance|eingegebener kontostand/i).fill('1000.00');
-	await page.getByRole('button', { name: /validate account setup|kontoeinrichtung prüfen/i }).click();
+	await page
+		.getByRole('button', { name: /check rows and duplicates|zeilen und duplikate prüfen/i })
+		.click();
 	const confirmInitialization = page.waitForResponse(
 		(response) =>
 			response.url().endsWith('/api/imports/confirm') && response.request().method() === 'POST'
@@ -116,12 +128,40 @@ test('switching to an initialized existing account requires a reported balance',
 			.getByRole('heading', { name: /upload csv|csv hochladen/i })
 			.locator('xpath=ancestor::section[1]')
 	).toHaveAttribute('aria-busy', 'false');
-	await uploadForm().getByRole('button', { name: /csv scheme|csv-schema/i }).click();
+	await uploadForm()
+		.getByRole('button', { name: /csv scheme|csv-schema/i })
+		.click();
+	await page.getByRole('option', { name: /dkb giro card|dkb giro card/i }).click();
+	await uploadForm()
+		.getByLabel(/csv file|csv-datei/i)
+		.setInputFiles(resolve('tests/fixtures/dkb-giro-basic.csv'));
+	await uploadForm()
+		.getByRole('button', { name: /detect accounts|konten erkennen/i })
+		.click();
+	await expect(page.getByTestId('importable-row-count')).toContainText('0');
+	await expect(page.getByTestId('duplicate-row-count')).toContainText('3');
+	await expect(dkbGroup.getByTestId('importable-rows')).toHaveCount(0);
+	await expect(
+		page.getByRole('button', { name: /confirm import|import bestätigen/i })
+	).toBeDisabled();
+
+	await page.goto('/imports');
+	await page.waitForLoadState('networkidle');
+	await expect(
+		page
+			.getByRole('heading', { name: /upload csv|csv hochladen/i })
+			.locator('xpath=ancestor::section[1]')
+	).toHaveAttribute('aria-busy', 'false');
+	await uploadForm()
+		.getByRole('button', { name: /csv scheme|csv-schema/i })
+		.click();
 	await page.getByRole('option', { name: 'N26', exact: true }).click();
 	await uploadForm()
 		.getByLabel(/csv file|csv-datei/i)
 		.setInputFiles(resolve('tests/fixtures/n26-basic.csv'));
-	await uploadForm().getByRole('button', { name: /detect accounts|konten erkennen/i }).click();
+	await uploadForm()
+		.getByRole('button', { name: /detect accounts|konten erkennen/i })
+		.click();
 	const mainGroup = page
 		.getByRole('heading', { name: 'Main', exact: true })
 		.locator('xpath=ancestor::article[1]');
@@ -132,12 +172,25 @@ test('switching to an initialized existing account requires a reported balance',
 	await page.getByRole('option', { name: /complete history|vollständige historie/i }).click();
 	await expect(mainGroup.getByText(/complete history|vollständige historie/i)).toBeVisible();
 	await mainGroup.getByRole('button', { name: /target account|zielkonto/i }).click();
-	await page.getByRole('option', { name: /use existing account|bestehendes konto verwenden/i }).click();
+	await page
+		.getByRole('option', { name: /use existing account|bestehendes konto verwenden/i })
+		.click();
 	await mainGroup.getByRole('button', { name: /^account$|^konto$/i }).click();
 	await page.getByRole('option', { name: accountName, exact: true }).click();
-	await expect(mainGroup.getByRole('button', { name: /balance basis|saldogrundlage/i })).toBeDisabled();
-	await mainGroup.getByLabel(/entered balance|eingegebener kontostand/i).fill('1000.00');
+	await expect(
+		mainGroup.getByText(
+			/balance is calculated automatically from the existing anchor|kontostand wird automatisch aus dem vorhandenen anker berechnet/i
+		)
+	).toBeVisible();
+	await expect(
+		mainGroup.getByRole('button', { name: /balance basis|saldogrundlage/i })
+	).toHaveCount(0);
+	await expect(mainGroup.getByLabel(/entered balance|eingegebener kontostand/i)).toHaveCount(0);
 	await savingsGroup.getByLabel(/entered balance|eingegebener kontostand/i).fill('-24.00');
-	await page.getByRole('button', { name: /validate account setup|kontoeinrichtung prüfen/i }).click();
-	await expect(page.getByRole('button', { name: /confirm import|import bestätigen/i })).toBeEnabled();
+	await page
+		.getByRole('button', { name: /check rows and duplicates|zeilen und duplikate prüfen/i })
+		.click();
+	await expect(
+		page.getByRole('button', { name: /confirm import|import bestätigen/i })
+	).toBeEnabled();
 });
