@@ -29,3 +29,4 @@ project.inlang/cache/
 example_data/
 .playwright-mcp/
 SENSITIVE_HISTORY_REPORT.md
+/fab-private/
