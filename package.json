@@ -23,8 +23,8 @@
 		"@inlang/paraglide-js": "^2.18.2",
 		"@playwright/test": "^1.60.0",
 		"@sveltejs/adapter-cloudflare": "^7.2.8",
-		"@sveltejs/kit": "^2.63.0",
-		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@sveltejs/kit": "^2.70.3",
+		"@sveltejs/vite-plugin-svelte": "^7.3.0",
 		"@tailwindcss/forms": "^0.5.11",
 		"@tailwindcss/vite": "^4.3.0",
 		"@types/node": "^22",
@@ -44,13 +44,18 @@
 		"tailwindcss": "^4.3.0",
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.60.1",
-		"vite": "^8.0.16",
+		"vite": "^8.2.2",
 		"vitest": "^4.1.8",
 		"vitest-browser-svelte": "^2.1.1",
 		"wrangler": "^4.97.0"
 	},
 	"dependencies": {
-		"layerchart": "^2.0.1"
+		"layerchart": "^2.3.0"
+	},
+	"pnpm": {
+		"overrides": {
+			"cookie": "0.7.2"
+		}
 	},
 	"packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
 }
