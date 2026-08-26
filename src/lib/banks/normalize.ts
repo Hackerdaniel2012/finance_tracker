@@ -56,6 +56,11 @@ export function normalizeWhitespace(...parts: Array<string | undefined>): string
 		.trim();
 }
 
+export function isPendingDkbStatus(value: string | undefined): boolean {
+	const normalized = value?.trim().toLocaleLowerCase('de-DE').replace(/\s+/g, '');
+	return normalized === 'vorgemerkt' || normalized === 'notedstatement';
+}
+
 export function stableFingerprint(parts: Array<string | number | undefined>): string {
 	const input = parts
 		.map((part) =>

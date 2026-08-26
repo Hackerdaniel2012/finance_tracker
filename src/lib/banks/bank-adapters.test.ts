@@ -217,6 +217,21 @@ describe('DKB adapter', () => {
 		expect(result.rows.map((row) => row.payee)).toEqual(['Employer', 'Shop']);
 	});
 
+	it('skips pending DKB giro transactions without reporting parse errors', () => {
+		const csv = [
+			'"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"',
+			'"25.08.26";"";"Vorgemerkt";"Me";"Pending Shop";"Pending";"Ausgang";"DE";"12,34";"";"";"pending-ref"',
+			'"24.08.26";"24.08.26";"Gebucht";"Me";"Booked Shop";"Booked";"Ausgang";"DE";"5,67";"";"";"booked-ref"'
+		].join('\n');
+
+		const result = dkbAdapter.parse(csv);
+
+		expect(result.errors).toEqual([]);
+		expect(result.skippedRows).toBe(1);
+		expect(result.rows).toHaveLength(1);
+		expect(result.rows[0]?.payee).toBe('Booked Shop');
+	});
+
 	it('keeps DKB transactions with the same Kundenreferenz but different postings distinct', () => {
 		const csv = [
 			'"Buchungsdatum";"Wertstellung";"Status";"Zahlungspflichtige*r";"Zahlungsempfänger*in";"Verwendungszweck";"Umsatztyp";"IBAN";"Betrag (€)";"Gläubiger-ID";"Mandatsreferenz";"Kundenreferenz"',
@@ -313,6 +328,21 @@ describe('DKB credit card adapter', () => {
 			expect.stringMatching(/^fp_[0-9a-f]{8}:2$/)
 		]);
 		expect(new Set(result.rows.map((row) => row.dedupeKey))).toHaveLength(4);
+	});
+
+	it('skips pending DKB credit card transactions without requiring a value date', () => {
+		const csv = [
+			'"Belegdatum";"Wertstellung";"Status";"Beschreibung";"Umsatztyp";"Betrag (€)";"Fremdwährungsbetrag"',
+			'"25.08.26";"";"Vorgemerkt";"Pending Shop";"Onlinezahlung";"-12,34";""',
+			'"24.08.26";"24.08.26";"Gebucht";"Booked Shop";"Onlinezahlung";"-5,67";""'
+		].join('\n');
+
+		const result = dkbCreditcardAdapter.parse(csv);
+
+		expect(result.errors).toEqual([]);
+		expect(result.skippedRows).toBe(1);
+		expect(result.rows).toHaveLength(1);
+		expect(result.rows[0]?.payee).toBe('Booked Shop');
 	});
 
 	it('requires the credit card headers and validates dates, amounts, and status', () => {

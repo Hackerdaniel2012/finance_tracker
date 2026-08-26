@@ -1,5 +1,6 @@
 import { findHeaderRow, missingRequiredColumns, parseDelimitedCsv, splitLines } from './csv';
 import {
+	isPendingDkbStatus,
 	makeParseError,
 	normalizeWhitespace,
 	parseGermanShortDate,
@@ -62,6 +63,10 @@ export const dkbAdapter: BankAdapter = {
 		const errors: ParseError[] = [...parsed.errors];
 
 		for (const record of parsed.records) {
+			if (isPendingDkbStatus(record.values.Status)) {
+				continue;
+			}
+
 			const bookingDate = parseGermanShortDate(record.values.Buchungsdatum ?? '');
 			const valueDate = parseGermanShortDate(record.values.Wertstellung ?? '');
 			const parsedAmount = parseEuroCents(record.values['Betrag (€)'] ?? '');
