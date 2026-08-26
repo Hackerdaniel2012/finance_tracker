@@ -155,11 +155,27 @@ describe('Trade Republic adapter', () => {
 		expect(result.rows[0]?.dedupeKey).toMatch(/^fp_[0-9a-f]{8}$/);
 	});
 
-	it('reports invalid amount and unsupported currency rows', () => {
+	it('includes fees and taxes in the reconciled cash movement', () => {
+		const csv = [
+			'"datetime","date","account_type","category","type","asset_class","name","symbol","shares","price","amount","fee","tax","currency","original_amount","original_currency","fx_rate","description","transaction_id","counterparty_name","counterparty_iban","payment_reference","mcc_code"',
+			'"2026-07-08T00:00:00.000Z","2026-07-08","DEFAULT","TRADING","BUY","STOCK","Example Stock","EXAMPLE","1","100.00","-100.00","-1.00","-0.25","EUR","","","","","id-1","","","",""',
+			'"2026-07-09T00:00:00.000Z","2026-07-09","DEFAULT","TRADING","SELL","STOCK","Example Stock","EXAMPLE","1","110.00","110.00","-1.00","-2.50","EUR","","","","","id-2","","","",""'
+		].join('\n');
+
+		const result = tradeRepublicAdapter.parse(csv);
+
+		expect(result.errors).toEqual([]);
+		expect(result.rows.map((row) => row.amountCents)).toEqual([-10125, 10650]);
+		expect(result.rows.reduce((sum, row) => sum + row.amountCents, 0)).toBe(525);
+	});
+
+	it('reports invalid cash components and unsupported currency rows', () => {
 		const csv = [
 			'"datetime","date","account_type","category","type","asset_class","name","symbol","shares","price","amount","fee","tax","currency","original_amount","original_currency","fx_rate","description","transaction_id","counterparty_name","counterparty_iban","payment_reference","mcc_code"',
 			'"2026-07-08T00:00:00.000Z","2026-07-08","DEFAULT","CASH","CUSTOMER_INBOUND","","Payee","","","","nope","","","EUR","","","","Note","id-1","Payee","DE","",""',
-			'"2026-07-08T00:00:00.000Z","2026-07-08","DEFAULT","CASH","CUSTOMER_INBOUND","","Payee","","","","10.00","","","USD","","","","Note","id-2","Payee","DE","",""'
+			'"2026-07-08T00:00:00.000Z","2026-07-08","DEFAULT","CASH","CUSTOMER_INBOUND","","Payee","","","","10.00","nope","","EUR","","","","Note","id-2","Payee","DE","",""',
+			'"2026-07-08T00:00:00.000Z","2026-07-08","DEFAULT","CASH","CUSTOMER_INBOUND","","Payee","","","","10.00","","nope","EUR","","","","Note","id-3","Payee","DE","",""',
+			'"2026-07-08T00:00:00.000Z","2026-07-08","DEFAULT","CASH","CUSTOMER_INBOUND","","Payee","","","","10.00","","","USD","","","","Note","id-4","Payee","DE","",""'
 		].join('\n');
 
 		const result = tradeRepublicAdapter.parse(csv);
@@ -167,6 +183,8 @@ describe('Trade Republic adapter', () => {
 		expect(result.rows).toEqual([]);
 		expect(result.errors.map((error) => error.code)).toEqual([
 			'invalid_amount',
+			'invalid_fee',
+			'invalid_tax',
 			'unsupported_currency'
 		]);
 	});

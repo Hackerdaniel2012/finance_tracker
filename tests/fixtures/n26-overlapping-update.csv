@@ -1,0 +1,6 @@
+"Booking Date","Value Date","Partner Name","Partner Iban",Type,"Payment Reference","Account Name","Amount (EUR)","Original Amount","Original Currency","Exchange Rate"
+2026-07-02,2026-07-02,Example Market,DE00000000000000000000,"Debit Transfer",Synthetic groceries,Main,-42.50,,,
+2026-07-04,2026-07-04,Example Cafe,DE00000000000000000000,"Debit Transfer",Synthetic coffee,Main,-5.00,,,
+2026-07-03,2026-07-03,Example Service,DE00000000000000000000,"Direct Debit",Synthetic subscription,Savings,-12.00,,,
+2026-07-03,2026-07-03,Example Service,DE00000000000000000000,"Direct Debit",Synthetic subscription,Savings,-12.00,,,
+2026-07-04,2026-07-04,Example Bank,DE00000000000000000000,"Credit Transfer",Synthetic interest,Savings,5.00,,,

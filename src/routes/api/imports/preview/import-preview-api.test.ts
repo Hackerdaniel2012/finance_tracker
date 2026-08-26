@@ -24,8 +24,13 @@ describe('/api/imports/preview', () => {
 		await expect(response.json()).resolves.toMatchObject({
 			preview: {
 				adapterId: 'dkb_girocard',
-				readyToConfirm: false,
-				summary: { accountCount: 1, parsedRows: 3 }
+				status: 'needs_configuration',
+				summary: {
+					accountCount: 1,
+					parsedRows: 3,
+					newRowCount: null,
+					duplicateCount: null
+				}
 			}
 		});
 	});

@@ -15,6 +15,8 @@ const requiredColumns = [
 	'type',
 	'name',
 	'amount',
+	'fee',
+	'tax',
 	'currency',
 	'transaction_id'
 ];
@@ -48,7 +50,11 @@ export const tradeRepublicAdapter: BankAdapter = {
 		for (const record of parsed.records) {
 			const bookingDate = parseIsoDate(record.values.date ?? '');
 			const rawAmount = record.values.amount ?? '';
-			const amountCents = parseEuroCents(rawAmount);
+			const rawFee = record.values.fee ?? '';
+			const rawTax = record.values.tax ?? '';
+			const baseAmountCents = parseEuroCents(rawAmount);
+			const feeCents = rawFee.trim() ? parseEuroCents(rawFee) : 0;
+			const taxCents = rawTax.trim() ? parseEuroCents(rawTax) : 0;
 
 			if (!bookingDate) {
 				errors.push(
@@ -61,9 +67,23 @@ export const tradeRepublicAdapter: BankAdapter = {
 				continue;
 			}
 
-			if (amountCents === undefined) {
+			if (baseAmountCents === undefined) {
 				errors.push(
 					makeParseError(record.rowNumber, 'invalid_amount', 'amount must be a decimal amount')
+				);
+				continue;
+			}
+
+			if (feeCents === undefined) {
+				errors.push(
+					makeParseError(record.rowNumber, 'invalid_fee', 'fee must be a decimal amount')
+				);
+				continue;
+			}
+
+			if (taxCents === undefined) {
+				errors.push(
+					makeParseError(record.rowNumber, 'invalid_tax', 'tax must be a decimal amount')
 				);
 				continue;
 			}
@@ -76,6 +96,7 @@ export const tradeRepublicAdapter: BankAdapter = {
 			}
 
 			const externalId = record.values.transaction_id || undefined;
+			const amountCents = baseAmountCents + feeCents + taxCents;
 			const payee = record.values.counterparty_name || record.values.name || undefined;
 			const description = normalizeWhitespace(
 				record.values.category,

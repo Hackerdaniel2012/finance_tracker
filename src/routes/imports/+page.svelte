@@ -10,6 +10,7 @@
 
 	type BankId = 'n26' | 'trade_republic' | 'dkb_girocard' | 'dkb_creditcard';
 	type BalanceMode = 'reported' | 'complete_history' | 'anchored';
+	type PreviewStatus = 'needs_configuration' | 'ready' | 'no_new_transactions';
 	interface Account {
 		id: string;
 		name: string;
@@ -33,6 +34,11 @@
 		sourceAccountLabel: string;
 		stableSourceKey: boolean;
 		suggestedAccountId: string | null;
+		assignment: {
+			sourceAccountKey: string | null;
+			targetAccountId?: string;
+			balanceMode: BalanceMode;
+		} | null;
 		suggestedName: string;
 		rowCount: number;
 		startDate: string | null;
@@ -50,13 +56,14 @@
 		adapterId: BankId;
 		fileHash: string;
 		configurationHash: string | null;
-		readyToConfirm: boolean;
+		status: PreviewStatus;
 		summary: {
 			parsedRows: number;
 			skippedRows: number;
 			errorCount: number;
 			accountCount: number;
-			duplicateEstimate: number;
+			newRowCount: number | null;
+			duplicateCount: number | null;
 			startDate: string | null;
 			endDate: string | null;
 		};
@@ -71,6 +78,7 @@
 		institution: string;
 		balanceMode: BalanceMode;
 		reportedBalance: string;
+		autoResolved: boolean;
 	}
 	interface ImportReport {
 		runId: string;
@@ -115,19 +123,13 @@
 	const canDiscover = $derived(selectedAdapterId !== '' && selectedFile !== null && !isPreviewing);
 	const canValidate = $derived(
 		preview !== null &&
+			preview.status === 'needs_configuration' &&
 			selectedFile !== null &&
 			assignments.length === preview.accounts.length &&
 			assignments.every(assignmentIsComplete) &&
 			!isValidating
 	);
-	const canConfirm = $derived(
-		preview?.readyToConfirm === true &&
-			preview.accounts.some((group) => (group.importableRowCount ?? 0) > 0) &&
-			!isConfirming
-	);
-	const importableRowCount = $derived(
-		preview?.accounts.reduce((sum, group) => sum + (group.importableRowCount ?? 0), 0) ?? 0
-	);
+	const canConfirm = $derived(preview?.status === 'ready' && !isConfirming);
 
 	onMount(() => void Promise.all([loadSetup(), loadHistory()]));
 
@@ -174,7 +176,13 @@
 	}
 
 	function invalidateConfiguration() {
-		if (preview?.readyToConfirm) preview = { ...preview, readyToConfirm: false };
+		if (!preview) return;
+		preview = {
+			...preview,
+			status: 'needs_configuration',
+			configurationHash: null,
+			summary: { ...preview.summary, newRowCount: null, duplicateCount: null }
+		};
 	}
 
 	function normalizeAssignmentTarget(assignment: AssignmentForm) {
@@ -188,6 +196,7 @@
 			} else if (assignment.balanceMode === 'anchored') {
 				assignment.balanceMode = 'reported';
 			}
+			assignment.autoResolved = false;
 			invalidateConfiguration();
 		});
 	}
@@ -238,7 +247,7 @@
 	}
 
 	async function confirmImport() {
-		if (!selectedFile || !preview?.readyToConfirm) return;
+		if (!selectedFile || preview?.status !== 'ready') return;
 		isConfirming = true;
 		previewError = null;
 		try {
@@ -279,6 +288,18 @@
 	}
 
 	function initialAssignment(group: PreviewAccount): AssignmentForm {
+		if (group.assignment?.targetAccountId) {
+			return {
+				sourceAccountKey: group.sourceAccountKey,
+				targetKind: 'existing',
+				targetAccountId: group.assignment.targetAccountId,
+				name: group.suggestedName,
+				institution: schemeLabel(preview!.adapterId),
+				balanceMode: group.assignment.balanceMode,
+				reportedBalance: '',
+				autoResolved: group.assignment.balanceMode === 'anchored'
+			};
+		}
 		const suggested = accounts.find((account) => account.id === group.suggestedAccountId);
 		return {
 			sourceAccountKey: group.sourceAccountKey,
@@ -287,7 +308,8 @@
 			name: group.suggestedName,
 			institution: schemeLabel(preview!.adapterId),
 			balanceMode: suggested?.balanceInitialized ? 'anchored' : 'reported',
-			reportedBalance: ''
+			reportedBalance: '',
+			autoResolved: false
 		};
 	}
 
@@ -412,13 +434,15 @@
 				<h2 class="text-lg font-semibold text-zinc-950">{m.import_preview_title()}</h2>
 				{#if preview}
 					<div class="flex gap-2">
-						<button
-							class="flex h-11 items-center gap-2 rounded border border-zinc-300 px-4 text-sm font-medium disabled:opacity-50"
-							type="button"
-							disabled={!canValidate}
-							onclick={validateConfiguration}
-							>{#if isValidating}<ButtonSpinner />{/if}{m.check_import_rows()}</button
-						>
+						{#if preview.status === 'needs_configuration'}
+							<button
+								class="flex h-11 items-center gap-2 rounded border border-zinc-300 px-4 text-sm font-medium disabled:opacity-50"
+								type="button"
+								disabled={!canValidate}
+								onclick={validateConfiguration}
+								>{#if isValidating}<ButtonSpinner />{/if}{m.check_import_rows()}</button
+							>
+						{/if}
 						<button
 							class="flex h-11 items-center gap-2 rounded bg-zinc-950 px-4 text-sm font-medium text-white disabled:opacity-50"
 							type="button"
@@ -438,32 +462,38 @@
 					{#each Array(2) as _}<Skeleton class="h-72 w-full" rounded="rounded-ui" />{/each}
 				</div>
 			{:else if preview}
-				<div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+				{#if preview.status === 'no_new_transactions'}
+					<div class="mt-4 rounded-ui border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+						<p class="font-semibold">{m.no_new_transactions_to_import()}</p>
+						<p class="mt-1">{m.no_new_transactions_description()}</p>
+					</div>
+				{/if}
+				<div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
 					<article class="rounded-ui border border-zinc-200 p-4">
 						<p class="text-sm text-zinc-500">{m.detected_accounts()}</p>
 						<p class="mt-1 text-2xl font-semibold">{preview.summary.accountCount}</p>
 					</article>
-					<article class="rounded-ui border border-zinc-200 p-4">
-						<p class="text-sm text-zinc-500">{m.parsed_rows()}</p>
-						<p class="mt-1 text-2xl font-semibold">{preview.summary.parsedRows}</p>
-					</article>
 					<article class="rounded-ui border border-zinc-200 p-4" data-testid="importable-row-count">
 						<p class="text-sm text-zinc-500">{m.rows_to_import()}</p>
 						<p class="mt-1 text-2xl font-semibold">
-							{preview.readyToConfirm ? importableRowCount : '—'}
+							{preview.summary.newRowCount ?? '—'}
 						</p>
-						{#if !preview.readyToConfirm}<p class="mt-1 text-xs text-zinc-500">
+						{#if preview.summary.newRowCount === null}<p class="mt-1 text-xs text-zinc-500">
 								{m.row_counts_pending()}
 							</p>{/if}
 					</article>
 					<article class="rounded-ui border border-zinc-200 p-4" data-testid="duplicate-row-count">
 						<p class="text-sm text-zinc-500">{m.duplicate_rows()}</p>
 						<p class="mt-1 text-2xl font-semibold">
-							{preview.readyToConfirm ? preview.summary.duplicateEstimate : '—'}
+							{preview.summary.duplicateCount ?? '—'}
 						</p>
-						{#if !preview.readyToConfirm}<p class="mt-1 text-xs text-zinc-500">
+						{#if preview.summary.duplicateCount === null}<p class="mt-1 text-xs text-zinc-500">
 								{m.row_counts_pending()}
 							</p>{/if}
+					</article>
+					<article class="rounded-ui border border-zinc-200 p-4">
+						<p class="text-sm text-zinc-500">{m.parsed_rows()}</p>
+						<p class="mt-1 text-2xl font-semibold">{preview.summary.parsedRows}</p>
 					</article>
 					<article class="rounded-ui border border-zinc-200 p-4">
 						<p class="text-sm text-zinc-500">{m.date_range()}</p>
@@ -489,96 +519,109 @@
 										})}
 									</p>
 								</div>
-								{#if group.suggestedAccountId}<span
+								{#if assignment?.autoResolved}<span
 										class="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700"
-										>{m.saved_mapping_found()}</span
+										>{m.automatically_mapped()}</span
 									>{/if}
 							</div>
+							{#if group.importableRowCount !== null}
+								<p class="mt-3 text-sm font-medium text-zinc-700">
+									{m.account_update_summary({
+										newRows: group.importableRowCount,
+										duplicates: group.duplicateRows.length
+									})}
+								</p>
+							{/if}
 							{#if assignment}
-								<div class="mt-4 grid gap-4 md:grid-cols-2">
-									<div class="grid gap-1 text-sm font-medium text-zinc-700">
-										<span>{m.target_account()}</span><Picker
-											ariaLabel={m.target_account()}
-											placeholder={m.required()}
-											options={[
-												{ value: 'existing', label: m.use_existing_account() },
-												{ value: 'new', label: m.create_new_account() }
-											]}
-											bind:value={assignment.targetKind}
-											onchange={() => normalizeAssignmentTarget(assignment)}
-										/>
-									</div>
-									{#if assignment.targetKind === 'existing'}
+								<details
+									class="mt-4 rounded-ui border border-zinc-200 p-4"
+									open={!assignment.autoResolved}
+								>
+									<summary class="cursor-pointer text-sm font-medium text-zinc-800">
+										{assignment.autoResolved
+											? m.review_account_mapping()
+											: m.configure_account_mapping()}
+									</summary>
+									<div class="mt-4 grid gap-4 md:grid-cols-2">
 										<div class="grid gap-1 text-sm font-medium text-zinc-700">
-											<span>{m.account()}</span><Picker
-												ariaLabel={m.account()}
+											<span>{m.target_account()}</span><Picker
+												ariaLabel={m.target_account()}
 												placeholder={m.required()}
-												options={accounts.map((account) => ({
-													value: account.id,
-													label: account.name
-												}))}
-												bind:value={assignment.targetAccountId}
+												options={[
+													{ value: 'existing', label: m.use_existing_account() },
+													{ value: 'new', label: m.create_new_account() }
+												]}
+												bind:value={assignment.targetKind}
 												onchange={() => normalizeAssignmentTarget(assignment)}
 											/>
 										</div>
-									{:else}
-										<label class="grid gap-1 text-sm font-medium text-zinc-700"
-											><span>{m.account_name()}</span><input
-												class="h-11 rounded border border-zinc-300 px-3"
-												bind:value={assignment.name}
-												oninput={invalidateConfiguration}
-												required
-											/></label
-										>
-										<label class="grid gap-1 text-sm font-medium text-zinc-700"
-											><span>{m.institution()}</span><input
-												class="h-11 rounded border border-zinc-300 px-3"
-												bind:value={assignment.institution}
-												oninput={invalidateConfiguration}
-											/></label
-										>
-									{/if}
-									{#if assignment.balanceMode === 'anchored'}
-										<p
-											class="self-end rounded bg-blue-50 p-3 text-sm leading-6 text-blue-800 md:col-span-2"
-										>
-											{m.balance_calculated_from_anchor()}
-										</p>
-									{:else}
-										<div class="grid gap-1 text-sm font-medium text-zinc-700">
-											<span>{m.balance_basis()}</span><Picker
-												ariaLabel={m.balance_basis()}
-												placeholder={m.required()}
-												options={[
-													{ value: 'reported', label: m.enter_current_balance() },
-													{
-														value: 'complete_history',
-														label: m.complete_history_from_zero()
-													}
-												]}
-												bind:value={assignment.balanceMode}
-												onchange={invalidateConfiguration}
-											/>
-										</div>
-									{/if}
-									{#if assignment.balanceMode === 'reported'}
-										<label class="grid gap-1 text-sm font-medium text-zinc-700"
-											><span>{m.entered_balance()}</span><input
-												class="h-11 rounded border border-zinc-300 px-3"
-												inputmode="decimal"
-												placeholder="0,00"
-												bind:value={assignment.reportedBalance}
-												oninput={invalidateConfiguration}
-												required
-											/></label
-										>
-									{:else if assignment.balanceMode === 'complete_history'}<p
-											class="self-end pb-2 text-sm leading-6 text-zinc-600"
-										>
-											{m.complete_history_confirmation()}
-										</p>{/if}
-								</div>
-								{#if preview.readyToConfirm}
+										{#if assignment.targetKind === 'existing'}
+											<div class="grid gap-1 text-sm font-medium text-zinc-700">
+												<span>{m.account()}</span><Picker
+													ariaLabel={m.account()}
+													placeholder={m.required()}
+													options={accounts.map((account) => ({
+														value: account.id,
+														label: account.name
+													}))}
+													bind:value={assignment.targetAccountId}
+													onchange={() => normalizeAssignmentTarget(assignment)}
+												/>
+											</div>
+										{:else}
+											<label class="grid gap-1 text-sm font-medium text-zinc-700"
+												><span>{m.account_name()}</span><input
+													class="h-11 rounded border border-zinc-300 px-3"
+													bind:value={assignment.name}
+													oninput={invalidateConfiguration}
+													required
+												/></label
+											>
+											<label class="grid gap-1 text-sm font-medium text-zinc-700"
+												><span>{m.institution()}</span><input
+													class="h-11 rounded border border-zinc-300 px-3"
+													bind:value={assignment.institution}
+													oninput={invalidateConfiguration}
+												/></label
+											>
+										{/if}
+										{#if assignment.balanceMode === 'anchored'}
+											<p class="self-end rounded bg-blue-50 p-3 text-sm leading-6 text-blue-800">
+												{m.balance_calculated_from_anchor()}
+											</p>
+										{:else}
+											<div class="grid gap-1 text-sm font-medium text-zinc-700">
+												<span>{m.balance_basis()}</span><Picker
+													ariaLabel={m.balance_basis()}
+													placeholder={m.required()}
+													options={[
+														{ value: 'reported', label: m.enter_current_balance() },
+														{ value: 'complete_history', label: m.complete_history_from_zero() }
+													]}
+													bind:value={assignment.balanceMode}
+													onchange={invalidateConfiguration}
+												/>
+											</div>
+										{/if}
+										{#if assignment.balanceMode === 'reported'}
+											<label class="grid gap-1 text-sm font-medium text-zinc-700"
+												><span>{m.entered_balance()}</span><input
+													class="h-11 rounded border border-zinc-300 px-3"
+													inputmode="decimal"
+													placeholder="0,00"
+													bind:value={assignment.reportedBalance}
+													oninput={invalidateConfiguration}
+													required
+												/></label
+											>
+										{:else if assignment.balanceMode === 'complete_history'}<p
+												class="self-end pb-2 text-sm leading-6 text-zinc-600"
+											>
+												{m.complete_history_confirmation()}
+											</p>{/if}
+									</div>
+								</details>
+								{#if preview.status !== 'needs_configuration'}
 									<div class="mt-4 rounded bg-emerald-50 p-3 text-sm text-emerald-800">
 										{m.import_check_complete()}
 										{#if group.calculatedBalanceCents !== null}{m.calculated_balance()}: {centsToEuros(
@@ -597,7 +640,7 @@
 												><th class="px-2 py-2 text-right">{m.amount()}</th></tr
 											></thead
 										><tbody class="divide-y divide-zinc-100"
-										>{#each group.importableRows as row (row.dedupeKey)}<tr
+											>{#each group.importableRows as row (row.dedupeKey)}<tr
 													><td class="px-2 py-2">{formatDate(row.bookingDate)}</td><td
 														class="px-2 py-2"
 														>{row.payee || row.description || m.not_available()}</td

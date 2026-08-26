@@ -59,6 +59,9 @@ function parseAssignment(value: unknown, index: number): ImportAccountAssignment
 		}
 		result.targetAccountId = body.targetAccountId.trim();
 	} else {
+		if (balanceMode === 'anchored') {
+			throw new ValidationError(`assignments[${index}].balanceMode requires an existing account`);
+		}
 		const newAccount = asObject(body.newAccount, `assignments[${index}].newAccount`);
 		if (typeof newAccount.name !== 'string' || newAccount.name.trim() === '') {
 			throw new ValidationError(`assignments[${index}].newAccount.name is required`);
